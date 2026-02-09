@@ -6,7 +6,7 @@ use crate::parquet::{ParquetReader as PolarsReader, ParquetWriter as PolarsWrite
 use polars::prelude::*;
 use std::collections::HashMap;
 
-#[cxx::bridge(namespace = "basis::ffi")]
+#[cxx::bridge(namespace = "basis_rs::ffi")]
 mod ffi {
     /// Column data type enum shared between Rust and C++.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -4,15 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-basis-rs is a Rust utility library providing data processing modules with C++ FFI bindings. Uses Nix flakes for development environment management.
+basis-rs is a Rust utility library providing data processing modules with C++ bindings. Rust implements the core logic; CXX bridge exposes it to C++; a header-only C++ layer provides the user-facing API. Consumed by other projects via Nix flake + CMake `find_package(basis-rs)`.
 
 ## Development Environment
 
 ```bash
 # Enter dev shell (automatic with direnv, or manually)
+# Runs `cargo build --release` on entry to keep Rust artifacts in sync
 nix develop
 
-# Build Rust library (release mode, generates static lib)
+# Build Rust library (release mode, generates static lib + CXX bridge)
 cargo build --release
 
 # Run Rust tests
@@ -27,17 +28,20 @@ cargo clippy
 # Format code
 cargo fmt
 
-# Build C++ tests (requires Rust library to be built first)
-mkdir -p cpp/build && cd cpp/build && cmake .. && make
+# Build C++ library and tests (requires Rust to be built first)
+cmake -S . -B build -DBASIS_RS_BUILD_TESTS=ON && cmake --build build
 
 # Run C++ tests
-cd cpp/build && ctest --output-on-failure
+cd build && ctest --output-on-failure
 
 # Build everything (Rust + C++)
-cargo build --release && mkdir -p cpp/build && cd cpp/build && cmake .. && make
+cargo build --release && cmake -S . -B build -DBASIS_RS_BUILD_TESTS=ON && cmake --build build
 
 # Run all tests
-cargo test && cd cpp/build && ctest --output-on-failure
+cargo test && cd build && ctest --output-on-failure
+
+# Install to a prefix (for verification)
+cmake --install build --prefix /tmp/basis-rs-install
 ```
 
 ## Architecture
@@ -46,15 +50,37 @@ cargo test && cd cpp/build && ctest --output-on-failure
   - `lib.rs` - Crate entry point, re-exports public API
   - `parquet.rs` - Parquet file I/O using Polars with builder pattern API
   - `cxx_bridge.rs` - CXX bridge for type-safe Rust-C++ interop
-- `cpp/` - C++ wrapper layer and tests
-  - `basis_parquet.hpp` - Type-safe C++ wrapper with codec-based ParquetFile API
-  - `CMakeLists.txt` - CMake build configuration
-  - `tests/parquet_codec_test.cpp` - gtest unit tests for CXX bridge
+- `include/basis_rs/` - Public C++ headers
+  - `parquet.hpp` - Type-safe codec-based API for reading/writing Parquet files
+- `cpp/tests/` - C++ test suite
+  - `parquet_codec_test.cpp` - gtest unit tests for the Parquet codec
+- `cmake/` - CMake modules
+  - `Config.cmake.in` - Package config template for `find_package()` consumers
+  - `BuildHelpers.cmake` - Test helper functions (`make_cc_test`)
+- `CMakeLists.txt` - Root CMake build (library definition, install rules, tests)
 
-## C++ Usage
+## Consumer Usage
+
+### Nix flake integration
+
+```nix
+# In consuming project's flake.nix
+inputs.basis-rs.url = "github:user/basis-rs";
+# Then in buildInputs:
+buildInputs = [ basis-rs.packages.${system}.default ];
+```
+
+### CMake
+
+```cmake
+find_package(basis-rs REQUIRED)
+target_link_libraries(my_target basis_rs::parquet)
+```
+
+### C++ code
 
 ```cpp
-#include "basis_parquet.hpp"
+#include <basis_rs/parquet.hpp>
 
 struct MyData {
     int64_t id;
@@ -63,9 +89,9 @@ struct MyData {
 };
 
 template <>
-inline const basis::ParquetCodec<MyData>& basis::GetParquetCodec() {
-    static basis::ParquetCodec<MyData> codec = []() {
-        basis::ParquetCodec<MyData> c;
+inline const basis_rs::ParquetCodec<MyData>& basis_rs::GetParquetCodec() {
+    static basis_rs::ParquetCodec<MyData> codec = []() {
+        basis_rs::ParquetCodec<MyData> c;
         c.Add("id", &MyData::id);
         c.Add("name", &MyData::name);
         c.Add("score", &MyData::score);
@@ -74,13 +100,13 @@ inline const basis::ParquetCodec<MyData>& basis::GetParquetCodec() {
     return codec;
 }
 
-// Read parquet file
-basis::ParquetFile file("data.parquet");
+// Read
+basis_rs::ParquetFile file("data.parquet");
 auto records = file.ReadAll<MyData>();
 
-// Write parquet file
-basis::ParquetWriter<MyData> writer("output.parquet");
-writer.WriteRecord(entry);
+// Write
+auto writer = file.SpawnWriter<MyData>();
+writer.WriteRecord({1, "alice", 95.0});
 ```
 
 ## Key Dependencies
@@ -91,5 +117,5 @@ writer.WriteRecord(entry);
 - `cxx` - Type-safe Rust-C++ FFI bridge
 - `cxx-build` (build) - CXX bridge code generation
 
-### C++
-- GoogleTest (fetched by CMake) - Unit testing
+### C++ (test only)
+- GoogleTest (via `find_package(GTest)`) - Unit testing

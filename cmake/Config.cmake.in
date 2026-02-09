@@ -1,0 +1,38 @@
+@PACKAGE_INIT@
+
+if(NOT TARGET basis_rs::parquet)
+    # Resolve install prefix from config file location
+    get_filename_component(_BASIS_RS_PREFIX "${CMAKE_CURRENT_LIST_DIR}/../../.." ABSOLUTE)
+
+    # C++ bridge library (compiled CXX bridge source)
+    add_library(basis_rs::parquet STATIC IMPORTED)
+    set_target_properties(basis_rs::parquet PROPERTIES
+        IMPORTED_LOCATION "${_BASIS_RS_PREFIX}/@CMAKE_INSTALL_LIBDIR@/libbasis_rs_parquet.a"
+        INTERFACE_INCLUDE_DIRECTORIES "${_BASIS_RS_PREFIX}/@CMAKE_INSTALL_INCLUDEDIR@"
+        INTERFACE_COMPILE_FEATURES "cxx_std_17"
+    )
+
+    # Rust static library
+    set(_BASIS_RS_RUST_LIB "${_BASIS_RS_PREFIX}/@CMAKE_INSTALL_LIBDIR@/libbasis_rs.a")
+
+    # Platform-specific system libraries required by Rust runtime
+    set(_BASIS_RS_LINK_LIBS "${_BASIS_RS_RUST_LIB}")
+    if(UNIX AND NOT APPLE)
+        list(APPEND _BASIS_RS_LINK_LIBS pthread dl m)
+    elseif(APPLE)
+        find_library(_BASIS_RS_SECURITY Security)
+        find_library(_BASIS_RS_COREFOUNDATION CoreFoundation)
+        list(APPEND _BASIS_RS_LINK_LIBS pthread dl
+            ${_BASIS_RS_SECURITY} ${_BASIS_RS_COREFOUNDATION})
+    endif()
+
+    set_target_properties(basis_rs::parquet PROPERTIES
+        INTERFACE_LINK_LIBRARIES "${_BASIS_RS_LINK_LIBS}"
+    )
+
+    unset(_BASIS_RS_PREFIX)
+    unset(_BASIS_RS_RUST_LIB)
+    unset(_BASIS_RS_LINK_LIBS)
+endif()
+
+check_required_components(basis-rs)
