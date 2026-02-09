@@ -9,7 +9,44 @@
   };
 
   outputs = { self, nixpkgs, utils, devshell, rust-overlay, ... }:
-    utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ] (system:
+    let
+      mkBasisRs = pkgs: pkgs.rustPlatform.buildRustPackage {
+        pname = "basis-rs";
+        version = "0.1.0";
+
+        src = pkgs.lib.cleanSource ./.;
+
+        cargoLock = {
+          lockFile = ./Cargo.lock;
+        };
+
+        nativeBuildInputs = with pkgs; [ cmake ];
+
+        buildType = "release";
+        doCheck = true;
+
+        # After cargo build, run CMake to build the C++ bridge library
+        postBuild = ''
+          cmake -S . -B cmake-build \
+            -DCMAKE_INSTALL_PREFIX=$out \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBASIS_RS_BUILD_TESTS=OFF
+          cmake --build cmake-build
+        '';
+
+        # Override default install (cargo install is for binaries, not libraries)
+        installPhase = ''
+          runHook preInstall
+          cmake --install cmake-build
+          runHook postInstall
+        '';
+      };
+    in
+    {
+      overlays.default = final: prev: {
+        basis-rs = mkBasisRs final;
+      };
+    } // utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ] (system:
       let
         pkgs = import nixpkgs {
           inherit system;
@@ -23,42 +60,10 @@
           extensions = [ "rust-src" "rust-analyzer" ];
         };
 
-        basis-rs = pkgs.rustPlatform.buildRustPackage {
-          pname = "basis-rs";
-          version = "0.1.0";
-
-          src = pkgs.lib.cleanSource ./.;
-
-          cargoLock = {
-            lockFile = ./Cargo.lock;
-          };
-
-          nativeBuildInputs = with pkgs; [ cmake ];
-
-          buildType = "release";
-          doCheck = true;
-
-          # After cargo build, run CMake to build the C++ bridge library
-          postBuild = ''
-            cmake -S . -B cmake-build \
-              -DCMAKE_INSTALL_PREFIX=$out \
-              -DCMAKE_BUILD_TYPE=Release \
-              -DBASIS_RS_BUILD_TESTS=OFF
-            cmake --build cmake-build
-          '';
-
-          # Override default install (cargo install is for binaries, not libraries)
-          installPhase = ''
-            runHook preInstall
-            cmake --install cmake-build
-            runHook postInstall
-          '';
-        };
-
       in
       {
         packages = {
-          default = basis-rs;
+          default = mkBasisRs pkgs;
         };
 
         devShells.default = pkgs.devshell.mkShell {
