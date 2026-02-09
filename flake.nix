@@ -10,7 +10,14 @@
 
   outputs = { self, nixpkgs, utils, devshell, rust-overlay, ... }:
     let
-      mkBasisRs = pkgs: pkgs.rustPlatform.buildRustPackage {
+      mkBasisRs = pkgs:
+        let
+          rustToolchain = pkgs.rust-bin.stable.latest.default;
+          customRustPlatform = pkgs.makeRustPlatform {
+            cargo = rustToolchain;
+            rustc = rustToolchain;
+          };
+        in customRustPlatform.buildRustPackage {
         pname = "basis-rs";
         version = "0.1.0";
 
@@ -43,9 +50,12 @@
       };
     in
     {
-      overlays.default = final: prev: {
-        basis-rs = mkBasisRs final;
-      };
+      overlays.default = nixpkgs.lib.composeManyExtensions [
+        rust-overlay.overlays.default
+        (final: prev: {
+          basis-rs = mkBasisRs final;
+        })
+      ];
     } // utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ] (system:
       let
         pkgs = import nixpkgs {
