@@ -42,11 +42,11 @@ cargo test && cd cpp/build && ctest --output-on-failure
 
 ## Architecture
 
-- `src/lib.rs` - Crate entry point, re-exports from basis modules
-- `src/cxx_bridge.rs` - CXX bridge for type-safe Rust-C++ interop
-- `basis/` - Core modules (uses `#[path]` attribute for non-standard location)
-  - `parquet/` - Parquet file I/O using Polars with builder pattern API
-- `cpp/` - C++ bindings and tests
+- `src/` - Rust source (standard layout)
+  - `lib.rs` - Crate entry point, re-exports public API
+  - `parquet.rs` - Parquet file I/O using Polars with builder pattern API
+  - `cxx_bridge.rs` - CXX bridge for type-safe Rust-C++ interop
+- `cpp/` - C++ wrapper layer and tests
   - `basis_parquet.hpp` - Type-safe C++ wrapper with codec-based ParquetFile API
   - `CMakeLists.txt` - CMake build configuration
   - `tests/parquet_codec_test.cpp` - gtest unit tests for CXX bridge

@@ -2,7 +2,7 @@
 //!
 //! This module provides a safe FFI interface using the cxx crate.
 
-use crate::basis::parquet::{ParquetReader as PolarsReader, ParquetWriter as PolarsWriter};
+use crate::parquet::{ParquetReader as PolarsReader, ParquetWriter as PolarsWriter};
 use polars::prelude::*;
 use std::collections::HashMap;
 
