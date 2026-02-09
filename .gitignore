@@ -1,0 +1,15 @@
+/target
+**/*.rs.bk
+
+\.idea/
+support/
+*.dbf
+.DS_Store
+.vscode
+!tests/data/*.dbf
+
+# nix
+.direnv/
+.envrc
+result
+build/

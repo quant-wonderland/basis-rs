@@ -1,0 +1,22 @@
+[package]
+name = "basis-rs"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "basis of rust"
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+polars = { version = "0.46", features = ["parquet", "lazy"] }
+thiserror = "2.0"
+libc = "0.2"
+cxx = "1.0"
+
+[dev-dependencies]
+tempfile = "3.15"
+
+[build-dependencies]
+cbindgen = "0.28"
+cxx-build = "1.0"
