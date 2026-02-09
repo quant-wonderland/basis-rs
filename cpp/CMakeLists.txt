@@ -29,7 +29,6 @@ set(CXX_BRIDGE_SRC "${CXX_BRIDGE_DIR}/basis-rs/src/cxx_bridge.rs.cc")
 # Include directories
 include_directories(
     ${CMAKE_SOURCE_DIR}
-    ${CMAKE_SOURCE_DIR}/../include
     ${CXX_BRIDGE_DIR}
     ${CXX_BRIDGE_DIR}/basis-rs/src
     ${CXX_BRIDGE_DIR}/rust
@@ -56,18 +55,6 @@ elseif(APPLE)
     list(APPEND SYSTEM_LIBS ${SECURITY_FRAMEWORK} ${COREFOUNDATION_FRAMEWORK})
 endif()
 
-# Legacy FFI test executable
-add_executable(parquet_test
-    tests/parquet_test.cpp
-)
-
-target_link_libraries(parquet_test
-    ${BASIS_RS_LIB}
-    GTest::gtest
-    GTest::gtest_main
-    ${SYSTEM_LIBS}
-)
-
 # CXX-based ParquetCodec test executable
 add_executable(parquet_codec_test
     tests/parquet_codec_test.cpp
@@ -83,5 +70,4 @@ target_link_libraries(parquet_codec_test
 
 # Enable testing
 enable_testing()
-add_test(NAME ParquetTest COMMAND parquet_test)
 add_test(NAME ParquetCodecTest COMMAND parquet_codec_test)

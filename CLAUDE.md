@@ -12,7 +12,7 @@ basis-rs is a Rust utility library providing data processing modules with C++ FF
 # Enter dev shell (automatic with direnv, or manually)
 nix develop
 
-# Build Rust library (release mode, generates static lib and C header)
+# Build Rust library (release mode, generates static lib)
 cargo build --release
 
 # Run Rust tests
@@ -43,30 +43,44 @@ cargo test && cd cpp/build && ctest --output-on-failure
 ## Architecture
 
 - `src/lib.rs` - Crate entry point, re-exports from basis modules
-- `src/ffi.rs` - C FFI exports for cross-language usage
+- `src/cxx_bridge.rs` - CXX bridge for type-safe Rust-C++ interop
 - `basis/` - Core modules (uses `#[path]` attribute for non-standard location)
   - `parquet/` - Parquet file I/O using Polars with builder pattern API
-- `include/basis_rs.h` - Generated C header (by cbindgen)
 - `cpp/` - C++ bindings and tests
-  - `basis_rs.hpp` - C++ wrapper with RAII and exception handling
+  - `basis_parquet.hpp` - Type-safe C++ wrapper with codec-based ParquetFile API
   - `CMakeLists.txt` - CMake build configuration
-  - `tests/parquet_test.cpp` - gtest unit tests
+  - `tests/parquet_codec_test.cpp` - gtest unit tests for CXX bridge
 
 ## C++ Usage
 
 ```cpp
-#include "basis_rs.hpp"
+#include "basis_parquet.hpp"
+
+struct MyData {
+    int64_t id;
+    std::string name;
+    double score;
+};
+
+template <>
+inline const basis::ParquetCodec<MyData>& basis::GetParquetCodec() {
+    static basis::ParquetCodec<MyData> codec = []() {
+        basis::ParquetCodec<MyData> c;
+        c.Add("id", &MyData::id);
+        c.Add("name", &MyData::name);
+        c.Add("score", &MyData::score);
+        return c;
+    }();
+    return codec;
+}
 
 // Read parquet file
-auto df = basis::DataFrame::read_parquet("data.parquet");
-auto ids = df.get_int64_column("id");
-auto names = df.get_string_column("name");
+basis::ParquetFile file("data.parquet");
+auto records = file.ReadAll<MyData>();
 
-// Create and write parquet
-basis::DataFrame output;
-output.add_column("id", std::vector<int64_t>{1, 2, 3});
-output.add_column("name", std::vector<std::string>{"a", "b", "c"});
-output.write_parquet("output.parquet");
+// Write parquet file
+basis::ParquetWriter<MyData> writer("output.parquet");
+writer.WriteRecord(entry);
 ```
 
 ## Key Dependencies
@@ -74,8 +88,8 @@ output.write_parquet("output.parquet");
 ### Rust
 - `polars` (with `parquet`, `lazy` features) - DataFrame operations and Parquet I/O
 - `thiserror` - Error type definitions
-- `libc` - C types for FFI
-- `cbindgen` (build) - C header generation
+- `cxx` - Type-safe Rust-C++ FFI bridge
+- `cxx-build` (build) - CXX bridge code generation
 
 ### C++
 - GoogleTest (fetched by CMake) - Unit testing

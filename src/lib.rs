@@ -6,7 +6,6 @@
 pub mod basis;
 
 pub mod cxx_bridge;
-pub mod ffi;
 
 // Re-export commonly used items
 pub use basis::parquet::{ParquetError, ParquetReader, ParquetWriter};
