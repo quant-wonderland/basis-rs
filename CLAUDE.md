@@ -50,14 +50,10 @@ cmake --install build --prefix /tmp/basis-rs-install
   - `lib.rs` - Crate entry point, re-exports public API
   - `parquet.rs` - Parquet file I/O using Polars with builder pattern API
   - `cxx_bridge.rs` - CXX bridge for type-safe Rust-C++ interop
-- `include/basis_rs/` - Public C++ headers
-  - `parquet.hpp` - Type-safe codec-based API for reading/writing Parquet files
-- `cpp/tests/` - C++ test suite
-  - `parquet_codec_test.cpp` - gtest unit tests for the Parquet codec
-- `cmake/` - CMake modules
-  - `Config.cmake.in` - Package config template for `find_package()` consumers
-  - `BuildHelpers.cmake` - Test helper functions (`make_cc_test`)
-- `CMakeLists.txt` - Root CMake build (library definition, install rules, tests)
+- `cpp/` - C++ wrapper layer and tests
+  - `basis_parquet.hpp` - Type-safe C++ wrapper with codec-based ParquetFile API
+  - `CMakeLists.txt` - CMake build configuration
+  - `tests/parquet_codec_test.cpp` - gtest unit tests for CXX bridge
 
 ## Consumer Usage
 
