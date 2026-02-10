@@ -45,7 +45,13 @@ else()
 endif()
 
 # CXX bridge generated files
-set(CXX_BRIDGE_DIR "${RUST_TARGET_DIR}/cxxbridge")
+# cxx-build may place cxxbridge output at target/cxxbridge/ or
+# target/<triple>/cxxbridge/ depending on whether --target was used.
+if(RUST_TARGET_TRIPLE AND EXISTS "${RUST_TARGET_DIR}/${RUST_TARGET_TRIPLE}/cxxbridge")
+    set(CXX_BRIDGE_DIR "${RUST_TARGET_DIR}/${RUST_TARGET_TRIPLE}/cxxbridge")
+else()
+    set(CXX_BRIDGE_DIR "${RUST_TARGET_DIR}/cxxbridge")
+endif()
 set(CXX_BRIDGE_CC "${CXX_BRIDGE_DIR}/basis-rs/src/cxx_bridge.rs.cc")
 set(CXX_BRIDGE_H "${CXX_BRIDGE_DIR}/basis-rs/src/cxx_bridge.rs.h")
 
