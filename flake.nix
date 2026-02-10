@@ -37,7 +37,8 @@
           cmake -S . -B cmake-build \
             -DCMAKE_INSTALL_PREFIX=$out \
             -DCMAKE_BUILD_TYPE=Release \
-            -DBASIS_RS_BUILD_TESTS=OFF
+            -DBASIS_RS_BUILD_TESTS=OFF \
+            -DRUST_TARGET_TRIPLE=${pkgs.stdenv.hostPlatform.rust.rustcTarget}
           cmake --build cmake-build
         '';
 

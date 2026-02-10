@@ -18,10 +18,19 @@ option(BASIS_RS_BUILD_TESTS "Build unit tests" OFF)
 # ============================================================
 
 set(RUST_TARGET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/target")
+set(RUST_TARGET_TRIPLE "" CACHE STRING "Rust target triple (e.g. x86_64-unknown-linux-gnu). If set, look in target/<triple>/{release,debug}/.")
+
+if(RUST_TARGET_TRIPLE)
+    set(_RUST_RELEASE_DIR "${RUST_TARGET_DIR}/${RUST_TARGET_TRIPLE}/release")
+    set(_RUST_DEBUG_DIR   "${RUST_TARGET_DIR}/${RUST_TARGET_TRIPLE}/debug")
+else()
+    set(_RUST_RELEASE_DIR "${RUST_TARGET_DIR}/release")
+    set(_RUST_DEBUG_DIR   "${RUST_TARGET_DIR}/debug")
+endif()
 
 # Rust static library (try release first, then debug)
-set(RUST_LIB_RELEASE "${RUST_TARGET_DIR}/release/libbasis_rs.a")
-set(RUST_LIB_DEBUG "${RUST_TARGET_DIR}/debug/libbasis_rs.a")
+set(RUST_LIB_RELEASE "${_RUST_RELEASE_DIR}/libbasis_rs.a")
+set(RUST_LIB_DEBUG "${_RUST_DEBUG_DIR}/libbasis_rs.a")
 
 if(EXISTS "${RUST_LIB_RELEASE}")
     set(RUST_LIB "${RUST_LIB_RELEASE}")
