@@ -168,3 +168,14 @@ if(BASIS_RS_BUILD_TESTS)
     include(GoogleTest)
     add_subdirectory(cpp/tests)
 endif()
+
+# ============================================================
+# Benchmarks
+# ============================================================
+
+option(BASIS_RS_BUILD_BENCH "Build benchmarks" OFF)
+
+if(BASIS_RS_BUILD_BENCH)
+    add_executable(bench_parquet cpp/bench/bench_parquet.cpp)
+    target_link_libraries(bench_parquet PRIVATE basis_rs::parquet)
+endif()
