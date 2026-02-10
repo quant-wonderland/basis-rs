@@ -12,9 +12,9 @@
  *   };
  *
  *   template <>
- *   inline const basis::ParquetCodec<MyData>& basis::GetParquetCodec() {
- *       static basis::ParquetCodec<MyData> codec = []() {
- *           basis::ParquetCodec<MyData> c;
+ *   inline const basis_rs::ParquetCodec<MyData>& basis_rs::GetParquetCodec() {
+ *       static basis_rs::ParquetCodec<MyData> codec = []() {
+ *           basis_rs::ParquetCodec<MyData> c;
  *           c.Add("id", &MyData::id);
  *           c.Add("name", &MyData::name);
  *           c.Add("score", &MyData::score);
@@ -39,7 +39,7 @@
 // Include CXX-generated header
 #include "cxx_bridge.rs.h"
 
-namespace basis {
+namespace basis_rs {
 
 // Forward declaration
 template <typename RecordType>
@@ -367,4 +367,4 @@ class ParquetFile {
   std::filesystem::path path_;
 };
 
-}  // namespace basis
+}  // namespace basis_rs

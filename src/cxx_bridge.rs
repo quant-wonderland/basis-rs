@@ -2,11 +2,11 @@
 //!
 //! This module provides a safe FFI interface using the cxx crate.
 
-use crate::basis::parquet::{ParquetReader as PolarsReader, ParquetWriter as PolarsWriter};
+use crate::parquet::{ParquetReader as PolarsReader, ParquetWriter as PolarsWriter};
 use polars::prelude::*;
 use std::collections::HashMap;
 
-#[cxx::bridge(namespace = "basis::ffi")]
+#[cxx::bridge(namespace = "basis_rs::ffi")]
 mod ffi {
     /// Column data type enum shared between Rust and C++.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]

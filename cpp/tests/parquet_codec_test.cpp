@@ -1,4 +1,4 @@
-#include "basis_parquet.hpp"
+#include <basis_rs/parquet.hpp>
 #include <cstdio>
 #include <filesystem>
 #include <gtest/gtest.h>
@@ -29,9 +29,9 @@ struct BoolEntry {
 // ==================== Codec Registrations ====================
 
 template <>
-inline const basis::ParquetCodec<SimpleEntry>& basis::GetParquetCodec() {
-  static basis::ParquetCodec<SimpleEntry> codec = []() {
-    basis::ParquetCodec<SimpleEntry> c;
+inline const basis_rs::ParquetCodec<SimpleEntry>& basis_rs::GetParquetCodec() {
+  static basis_rs::ParquetCodec<SimpleEntry> codec = []() {
+    basis_rs::ParquetCodec<SimpleEntry> c;
     c.Add("id", &SimpleEntry::id);
     c.Add("name", &SimpleEntry::name);
     c.Add("score", &SimpleEntry::score);
@@ -41,9 +41,9 @@ inline const basis::ParquetCodec<SimpleEntry>& basis::GetParquetCodec() {
 }
 
 template <>
-inline const basis::ParquetCodec<NumericEntry>& basis::GetParquetCodec() {
-  static basis::ParquetCodec<NumericEntry> codec = []() {
-    basis::ParquetCodec<NumericEntry> c;
+inline const basis_rs::ParquetCodec<NumericEntry>& basis_rs::GetParquetCodec() {
+  static basis_rs::ParquetCodec<NumericEntry> codec = []() {
+    basis_rs::ParquetCodec<NumericEntry> c;
     c.Add("i32_val", &NumericEntry::i32_val);
     c.Add("i64_val", &NumericEntry::i64_val);
     c.Add("f32_val", &NumericEntry::f32_val);
@@ -54,9 +54,9 @@ inline const basis::ParquetCodec<NumericEntry>& basis::GetParquetCodec() {
 }
 
 template <>
-inline const basis::ParquetCodec<BoolEntry>& basis::GetParquetCodec() {
-  static basis::ParquetCodec<BoolEntry> codec = []() {
-    basis::ParquetCodec<BoolEntry> c;
+inline const basis_rs::ParquetCodec<BoolEntry>& basis_rs::GetParquetCodec() {
+  static basis_rs::ParquetCodec<BoolEntry> codec = []() {
+    basis_rs::ParquetCodec<BoolEntry> c;
     c.Add("id", &BoolEntry::id);
     c.Add("active", &BoolEntry::active);
     c.Add("verified", &BoolEntry::verified);
@@ -83,7 +83,7 @@ class ParquetCodecTest : public ::testing::Test {
 
 TEST_F(ParquetCodecTest, SimpleRoundtrip) {
   auto path = temp_dir_ / "simple.parquet";
-  basis::ParquetFile file(path);
+  basis_rs::ParquetFile file(path);
 
   // Write
   {
@@ -113,7 +113,7 @@ TEST_F(ParquetCodecTest, SimpleRoundtrip) {
 
 TEST_F(ParquetCodecTest, NumericTypes) {
   auto path = temp_dir_ / "numeric.parquet";
-  basis::ParquetFile file(path);
+  basis_rs::ParquetFile file(path);
 
   // Write
   {
@@ -141,7 +141,7 @@ TEST_F(ParquetCodecTest, NumericTypes) {
 
 TEST_F(ParquetCodecTest, BoolColumns) {
   auto path = temp_dir_ / "bool.parquet";
-  basis::ParquetFile file(path);
+  basis_rs::ParquetFile file(path);
 
   // Write
   {
@@ -172,7 +172,7 @@ TEST_F(ParquetCodecTest, BoolColumns) {
 
 TEST_F(ParquetCodecTest, EmptyStrings) {
   auto path = temp_dir_ / "empty_strings.parquet";
-  basis::ParquetFile file(path);
+  basis_rs::ParquetFile file(path);
 
   // Write with empty strings
   {
@@ -193,7 +193,7 @@ TEST_F(ParquetCodecTest, EmptyStrings) {
 
 TEST_F(ParquetCodecTest, UnicodeStrings) {
   auto path = temp_dir_ / "unicode.parquet";
-  basis::ParquetFile file(path);
+  basis_rs::ParquetFile file(path);
 
   // Write with Unicode strings
   {
@@ -214,7 +214,7 @@ TEST_F(ParquetCodecTest, UnicodeStrings) {
 
 TEST_F(ParquetCodecTest, WriteRecords) {
   auto path = temp_dir_ / "write_records.parquet";
-  basis::ParquetFile file(path);
+  basis_rs::ParquetFile file(path);
 
   // Write using WriteRecords
   std::vector<SimpleEntry> entries = {
@@ -239,7 +239,7 @@ TEST_F(ParquetCodecTest, WriteRecords) {
 
 TEST_F(ParquetCodecTest, LargeDataset) {
   auto path = temp_dir_ / "large.parquet";
-  basis::ParquetFile file(path);
+  basis_rs::ParquetFile file(path);
 
   const size_t n = 100000;
 
@@ -267,7 +267,7 @@ TEST_F(ParquetCodecTest, LargeDataset) {
 
 TEST_F(ParquetCodecTest, FileExists) {
   auto path = temp_dir_ / "exists.parquet";
-  basis::ParquetFile file(path);
+  basis_rs::ParquetFile file(path);
 
   EXPECT_FALSE(file.Exists());
 
@@ -280,12 +280,7 @@ TEST_F(ParquetCodecTest, FileExists) {
 }
 
 TEST_F(ParquetCodecTest, ReadNonExistentFile) {
-  basis::ParquetFile file("/nonexistent/path/file.parquet");
+  basis_rs::ParquetFile file("/nonexistent/path/file.parquet");
 
   EXPECT_THROW(file.ReadAll<SimpleEntry>(), std::exception);
-}
-
-int main(int argc, char** argv) {
-  ::testing::InitGoogleTest(&argc, argv);
-  return RUN_ALL_TESTS();
 }

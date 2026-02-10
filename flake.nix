@@ -8,8 +8,56 @@
     rust-overlay.url = "github:oxalica/rust-overlay";
   };
 
-  outputs = { self, nixpkgs, utils, devshell, rust-overlay, ... }@inputs:
-    utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ] (system:
+  outputs = { self, nixpkgs, utils, devshell, rust-overlay, ... }:
+    let
+      mkBasisRs = pkgs:
+        let
+          rustToolchain = pkgs.rust-bin.stable.latest.default;
+          customRustPlatform = pkgs.makeRustPlatform {
+            cargo = rustToolchain;
+            rustc = rustToolchain;
+          };
+        in customRustPlatform.buildRustPackage {
+        pname = "basis-rs";
+        version = "0.1.0";
+
+        src = pkgs.lib.cleanSource ./.;
+
+        cargoLock = {
+          lockFile = ./Cargo.lock;
+        };
+
+        nativeBuildInputs = with pkgs; [ cmake ];
+
+        buildType = "release";
+        doCheck = true;
+
+        # After cargo build, run CMake to build the C++ bridge library
+        postBuild = ''
+          cmake -S . -B cmake-build \
+            -DCMAKE_INSTALL_PREFIX=$out \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBASIS_RS_BUILD_TESTS=OFF \
+            -DRUST_TARGET_TRIPLE=${pkgs.stdenv.hostPlatform.rust.rustcTarget}
+          cmake --build cmake-build
+        '';
+
+        # Override default install (cargo install is for binaries, not libraries)
+        installPhase = ''
+          runHook preInstall
+          cmake --install cmake-build
+          runHook postInstall
+        '';
+      };
+    in
+    {
+      overlays.default = nixpkgs.lib.composeManyExtensions [
+        rust-overlay.overlays.default
+        (final: prev: {
+          basis-rs = mkBasisRs final;
+        })
+      ];
+    } // utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ] (system:
       let
         pkgs = import nixpkgs {
           inherit system;
@@ -18,52 +66,33 @@
             devshell.overlays.default
           ];
         };
-        
+
         rust-toolchain = (pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default)).override {
           extensions = [ "rust-src" "rust-analyzer" ];
         };
-        
-        # 构建Rust库
-        rust-package = pkgs.rustPlatform.buildRustPackage {
-          pname = "basis-rs";
-          version = "0.1.0";
-          
-          src = ./.;
-          
-          cargoHash = "sha256-0000000000000000000000000000000000000000000000000000"; # 首次构建时替换
-          # 或使用 cargoSha256 = "";  # 对于旧版本nixpkgs
-          
-          nativeBuildInputs = with pkgs; [
-            pkg-config
-          ];
-          
-          buildInputs = with pkgs; [
-            # 添加你需要的系统依赖
-            # openssl
-          ];
-          
-          # 构建类型
-          buildType = "release";
-          
-          # 测试设置
-          doCheck = true;
-          checkType = "release";
-        };
-        
+
       in
       {
-        # 开发环境
+        packages = {
+          default = mkBasisRs pkgs;
+        };
+
         devShells.default = pkgs.devshell.mkShell {
           name = "basis-rs-dev";
-          
+
+          devshell.startup.cargo-build = {
+            text = ''
+              echo "Synchronizing Rust build..."
+              cargo build --release 2>&1 | tail -1
+            '';
+          };
+
           packages = [
             rust-toolchain
-            # rustfmt and clippy are included in rust-toolchain
             pkgs.pkg-config
             pkgs.cargo-audit
             pkgs.cargo-outdated
             pkgs.cargo-edit
-            # C++ development tools
             pkgs.cmake
             pkgs.gtest
             pkgs.gcc
@@ -87,7 +116,7 @@
           commands = [
             {
               name = "build";
-              help = "Build Rust library";
+              help = "Build Rust library (release)";
               command = "cargo build --release";
             }
             {
@@ -112,37 +141,25 @@
             }
             {
               name = "cpp-build";
-              help = "Build C++ tests";
-              command = "mkdir -p cpp/build && cd cpp/build && cmake .. && make";
+              help = "Build C++ library and tests";
+              command = "cargo build --release && cmake -S . -B build -DBASIS_RS_BUILD_TESTS=ON && cmake --build build";
             }
             {
               name = "cpp-test";
               help = "Run C++ tests";
-              command = "cd cpp/build && ctest --output-on-failure";
+              command = "cd build && ctest --output-on-failure";
             }
             {
               name = "build-all";
-              help = "Build Rust and C++ (release)";
-              command = "cargo build --release && mkdir -p cpp/build && cd cpp/build && cmake .. && make";
+              help = "Build Rust + C++ (release)";
+              command = "cargo build --release && cmake -S . -B build -DBASIS_RS_BUILD_TESTS=ON && cmake --build build";
             }
             {
               name = "test-all";
               help = "Run all tests (Rust and C++)";
-              command = "cargo test && cd cpp/build && ctest --output-on-failure";
+              command = "cargo test && cd build && ctest --output-on-failure";
             }
           ];
-        };
-
-        # 构建包
-        packages = {
-          default = rust-package;
-          rustPackage = rust-package;
-        };
-
-        # 默认应用（如果需要可执行文件）
-        apps.default = {
-          type = "app";
-          program = "${rust-package}/bin/${rust-package.pname}";
         };
       }
     );
