@@ -33,6 +33,10 @@ mod ffi {
 
         // Reader functions
         fn parquet_reader_open(path: &str) -> Result<Box<ParquetReader>>;
+        fn parquet_reader_open_with_columns(
+            path: &str,
+            columns: Vec<String>,
+        ) -> Result<Box<ParquetReader>>;
         fn parquet_reader_num_rows(reader: &ParquetReader) -> usize;
         fn parquet_reader_num_cols(reader: &ParquetReader) -> usize;
         fn parquet_reader_columns(reader: &ParquetReader) -> Vec<ColumnInfo>;
@@ -115,6 +119,17 @@ pub struct ParquetWriter {
 
 fn parquet_reader_open(path: &str) -> Result<Box<ParquetReader>, String> {
     let df = PolarsReader::new(path)
+        .read()
+        .map_err(|e| e.to_string())?;
+    Ok(Box::new(ParquetReader { df }))
+}
+
+fn parquet_reader_open_with_columns(
+    path: &str,
+    columns: Vec<String>,
+) -> Result<Box<ParquetReader>, String> {
+    let df = PolarsReader::new(path)
+        .with_columns(columns)
         .read()
         .map_err(|e| e.to_string())?;
     Ok(Box::new(ParquetReader { df }))
