@@ -7,30 +7,67 @@ namespace fs = std::filesystem;
 
 // ==================== Test Data Structures ====================
 
-struct SimpleEntry {
+// read_all<template>.select(*.id)
+struct SimpleEntry
+{
   int64_t id;
   std::string name;
   double score;
 };
 
-struct NumericEntry {
+struct NumericEntry
+{
   int32_t i32_val;
   int64_t i64_val;
   float f32_val;
   double f64_val;
 };
 
-struct BoolEntry {
+struct BoolEntry
+{
   int64_t id;
   bool active;
   bool verified;
 };
 
+struct PartialEntry
+{
+  int64_t id;
+  double score;
+};
+
+struct StockSliceInfo
+{
+  int32_t stock_id;
+  float bid1_price;
+  float ask1_price;
+  float ask5_price;
+  float bid5_price;
+};
+
 // ==================== Codec Registrations ====================
 
 template <>
-inline const basis_rs::ParquetCodec<SimpleEntry>& basis_rs::GetParquetCodec() {
-  static basis_rs::ParquetCodec<SimpleEntry> codec = []() {
+inline const basis_rs::ParquetCodec<StockSliceInfo> &basis_rs::GetParquetCodec()
+{
+  static basis_rs::ParquetCodec<StockSliceInfo> codec = []()
+  {
+    basis_rs::ParquetCodec<StockSliceInfo> c;
+    c.Add("StockId", &StockSliceInfo::stock_id);
+    c.Add("Bid1", &StockSliceInfo::bid1_price);
+    c.Add("Ask1", &StockSliceInfo::ask1_price);
+    c.Add("Ask5", &StockSliceInfo::ask5_price);
+    c.Add("Bid5", &StockSliceInfo::bid5_price);
+    return c;
+  }();
+  return codec;
+}
+
+template <>
+inline const basis_rs::ParquetCodec<SimpleEntry> &basis_rs::GetParquetCodec()
+{
+  static basis_rs::ParquetCodec<SimpleEntry> codec = []()
+  {
     basis_rs::ParquetCodec<SimpleEntry> c;
     c.Add("id", &SimpleEntry::id);
     c.Add("name", &SimpleEntry::name);
@@ -41,8 +78,10 @@ inline const basis_rs::ParquetCodec<SimpleEntry>& basis_rs::GetParquetCodec() {
 }
 
 template <>
-inline const basis_rs::ParquetCodec<NumericEntry>& basis_rs::GetParquetCodec() {
-  static basis_rs::ParquetCodec<NumericEntry> codec = []() {
+inline const basis_rs::ParquetCodec<NumericEntry> &basis_rs::GetParquetCodec()
+{
+  static basis_rs::ParquetCodec<NumericEntry> codec = []()
+  {
     basis_rs::ParquetCodec<NumericEntry> c;
     c.Add("i32_val", &NumericEntry::i32_val);
     c.Add("i64_val", &NumericEntry::i64_val);
@@ -54,8 +93,10 @@ inline const basis_rs::ParquetCodec<NumericEntry>& basis_rs::GetParquetCodec() {
 }
 
 template <>
-inline const basis_rs::ParquetCodec<BoolEntry>& basis_rs::GetParquetCodec() {
-  static basis_rs::ParquetCodec<BoolEntry> codec = []() {
+inline const basis_rs::ParquetCodec<BoolEntry> &basis_rs::GetParquetCodec()
+{
+  static basis_rs::ParquetCodec<BoolEntry> codec = []()
+  {
     basis_rs::ParquetCodec<BoolEntry> c;
     c.Add("id", &BoolEntry::id);
     c.Add("active", &BoolEntry::active);
@@ -65,11 +106,26 @@ inline const basis_rs::ParquetCodec<BoolEntry>& basis_rs::GetParquetCodec() {
   return codec;
 }
 
+template <>
+inline const basis_rs::ParquetCodec<PartialEntry> &basis_rs::GetParquetCodec()
+{
+  static basis_rs::ParquetCodec<PartialEntry> codec = []()
+  {
+    basis_rs::ParquetCodec<PartialEntry> c;
+    c.Add("id", &PartialEntry::id);
+    c.Add("score", &PartialEntry::score);
+    return c;
+  }();
+  return codec;
+}
+
 // ==================== Test Fixture ====================
 
-class ParquetCodecTest : public ::testing::Test {
- protected:
-  void SetUp() override {
+class ParquetCodecTest : public ::testing::Test
+{
+protected:
+  void SetUp() override
+  {
     temp_dir_ = fs::temp_directory_path() / "basis_rs_codec_test";
     fs::create_directories(temp_dir_);
   }
@@ -81,7 +137,8 @@ class ParquetCodecTest : public ::testing::Test {
 
 // ==================== Basic Tests ====================
 
-TEST_F(ParquetCodecTest, SimpleRoundtrip) {
+TEST_F(ParquetCodecTest, SimpleRoundtrip)
+{
   auto path = temp_dir_ / "simple.parquet";
   basis_rs::ParquetFile file(path);
 
@@ -111,7 +168,8 @@ TEST_F(ParquetCodecTest, SimpleRoundtrip) {
   EXPECT_DOUBLE_EQ(records[2].score, 78.5);
 }
 
-TEST_F(ParquetCodecTest, NumericTypes) {
+TEST_F(ParquetCodecTest, NumericTypes)
+{
   auto path = temp_dir_ / "numeric.parquet";
   basis_rs::ParquetFile file(path);
 
@@ -139,7 +197,8 @@ TEST_F(ParquetCodecTest, NumericTypes) {
   EXPECT_DOUBLE_EQ(records[1].f64_val, 0.0);
 }
 
-TEST_F(ParquetCodecTest, BoolColumns) {
+TEST_F(ParquetCodecTest, BoolColumns)
+{
   auto path = temp_dir_ / "bool.parquet";
   basis_rs::ParquetFile file(path);
 
@@ -170,7 +229,8 @@ TEST_F(ParquetCodecTest, BoolColumns) {
   EXPECT_FALSE(records[3].verified);
 }
 
-TEST_F(ParquetCodecTest, EmptyStrings) {
+TEST_F(ParquetCodecTest, EmptyStrings)
+{
   auto path = temp_dir_ / "empty_strings.parquet";
   basis_rs::ParquetFile file(path);
 
@@ -191,7 +251,8 @@ TEST_F(ParquetCodecTest, EmptyStrings) {
   EXPECT_EQ(records[2].name, "");
 }
 
-TEST_F(ParquetCodecTest, UnicodeStrings) {
+TEST_F(ParquetCodecTest, UnicodeStrings)
+{
   auto path = temp_dir_ / "unicode.parquet";
   basis_rs::ParquetFile file(path);
 
@@ -212,13 +273,18 @@ TEST_F(ParquetCodecTest, UnicodeStrings) {
   EXPECT_EQ(records[2].name, "🎉🎊🎈");
 }
 
-TEST_F(ParquetCodecTest, WriteRecords) {
+TEST_F(ParquetCodecTest, WriteRecords)
+{
   auto path = temp_dir_ / "write_records.parquet";
   basis_rs::ParquetFile file(path);
 
   // Write using WriteRecords
   std::vector<SimpleEntry> entries = {
-      {1, "a", 1.0}, {2, "b", 2.0}, {3, "c", 3.0}, {4, "d", 4.0}, {5, "e", 5.0},
+      {1, "a", 1.0},
+      {2, "b", 2.0},
+      {3, "c", 3.0},
+      {4, "d", 4.0},
+      {5, "e", 5.0},
   };
 
   {
@@ -230,14 +296,16 @@ TEST_F(ParquetCodecTest, WriteRecords) {
   auto records = file.ReadAll<SimpleEntry>();
 
   ASSERT_EQ(records.size(), 5);
-  for (size_t i = 0; i < 5; ++i) {
+  for (size_t i = 0; i < 5; ++i)
+  {
     EXPECT_EQ(records[i].id, entries[i].id);
     EXPECT_EQ(records[i].name, entries[i].name);
     EXPECT_DOUBLE_EQ(records[i].score, entries[i].score);
   }
 }
 
-TEST_F(ParquetCodecTest, LargeDataset) {
+TEST_F(ParquetCodecTest, LargeDataset)
+{
   auto path = temp_dir_ / "large.parquet";
   basis_rs::ParquetFile file(path);
 
@@ -246,7 +314,8 @@ TEST_F(ParquetCodecTest, LargeDataset) {
   // Write large dataset
   {
     auto writer = file.SpawnWriter<SimpleEntry>();
-    for (size_t i = 0; i < n; ++i) {
+    for (size_t i = 0; i < n; ++i)
+    {
       writer.WriteRecord(
           {static_cast<int64_t>(i), "name_" + std::to_string(i), i * 0.1});
     }
@@ -265,7 +334,8 @@ TEST_F(ParquetCodecTest, LargeDataset) {
   EXPECT_EQ(records[n - 1].name, "name_" + std::to_string(n - 1));
 }
 
-TEST_F(ParquetCodecTest, FileExists) {
+TEST_F(ParquetCodecTest, FileExists)
+{
   auto path = temp_dir_ / "exists.parquet";
   basis_rs::ParquetFile file(path);
 
@@ -279,8 +349,141 @@ TEST_F(ParquetCodecTest, FileExists) {
   EXPECT_TRUE(file.Exists());
 }
 
-TEST_F(ParquetCodecTest, ReadNonExistentFile) {
+TEST_F(ParquetCodecTest, ReadNonExistentFile)
+{
   basis_rs::ParquetFile file("/nonexistent/path/file.parquet");
 
   EXPECT_THROW(file.ReadAll<SimpleEntry>(), std::exception);
+}
+
+// ==================== Query Builder Tests ====================
+
+TEST_F(ParquetCodecTest, QuerySelectByMemberPointer)
+{
+  auto path = temp_dir_ / "query_select.parquet";
+  basis_rs::ParquetFile file(path);
+
+  {
+    auto writer = file.SpawnWriter<SimpleEntry>();
+    writer.WriteRecord({1, "alice", 85.5});
+    writer.WriteRecord({2, "bob", 92.0});
+    writer.WriteRecord({3, "charlie", 78.5});
+  }
+
+  auto records = file.Read<SimpleEntry>()
+                     .Select(&SimpleEntry::id, &SimpleEntry::score)
+                     .Collect();
+
+  ASSERT_EQ(records.size(), 3);
+  EXPECT_EQ(records[0].id, 1);
+  EXPECT_DOUBLE_EQ(records[0].score, 85.5);
+  // name should be default (empty string) since not selected
+  EXPECT_EQ(records[0].name, "");
+}
+
+TEST_F(ParquetCodecTest, QuerySelectByName)
+{
+  auto path = temp_dir_ / "query_select_name.parquet";
+  basis_rs::ParquetFile file(path);
+
+  {
+    auto writer = file.SpawnWriter<SimpleEntry>();
+    writer.WriteRecord({1, "alice", 85.5});
+    writer.WriteRecord({2, "bob", 92.0});
+  }
+
+  auto records =
+      file.Read<SimpleEntry>().Select({"id", "name"}).Collect();
+
+  ASSERT_EQ(records.size(), 2);
+  EXPECT_EQ(records[0].id, 1);
+  EXPECT_EQ(records[0].name, "alice");
+  EXPECT_DOUBLE_EQ(records[0].score, 0.0); // default
+}
+
+TEST_F(ParquetCodecTest, QueryFilter)
+{
+  auto path = temp_dir_ / "query_filter.parquet";
+  basis_rs::ParquetFile file(path);
+
+  {
+    auto writer = file.SpawnWriter<SimpleEntry>();
+    writer.WriteRecord({1, "alice", 85.5});
+    writer.WriteRecord({2, "bob", 92.0});
+    writer.WriteRecord({3, "charlie", 78.5});
+  }
+
+  auto records = file.Read<SimpleEntry>()
+                     .Filter(&SimpleEntry::score, basis_rs::Gt, 80.0)
+                     .Collect();
+
+  ASSERT_EQ(records.size(), 2);
+  EXPECT_EQ(records[0].name, "alice");
+  EXPECT_EQ(records[1].name, "bob");
+}
+
+TEST_F(ParquetCodecTest, QuerySelectAndFilter)
+{
+  auto path = temp_dir_ / "query_both.parquet";
+  basis_rs::ParquetFile file(path);
+
+  {
+    auto writer = file.SpawnWriter<SimpleEntry>();
+    writer.WriteRecord({1, "alice", 85.5});
+    writer.WriteRecord({2, "bob", 92.0});
+    writer.WriteRecord({3, "charlie", 78.5});
+  }
+
+  auto records = file.Read<SimpleEntry>()
+                     .Select(&SimpleEntry::id, &SimpleEntry::score)
+                     .Filter(&SimpleEntry::score, basis_rs::Gt, 80.0)
+                     .Collect();
+
+  ASSERT_EQ(records.size(), 2);
+  EXPECT_EQ(records[0].id, 1);
+  EXPECT_DOUBLE_EQ(records[0].score, 85.5);
+  EXPECT_EQ(records[0].name, ""); // not selected -> default
+}
+
+TEST_F(ParquetCodecTest, QueryMultipleFilters)
+{
+  auto path = temp_dir_ / "query_multi_filter.parquet";
+  basis_rs::ParquetFile file(path);
+
+  {
+    auto writer = file.SpawnWriter<SimpleEntry>();
+    writer.WriteRecord({1, "alice", 85.5});
+    writer.WriteRecord({2, "bob", 92.0});
+    writer.WriteRecord({3, "charlie", 78.5});
+    writer.WriteRecord({4, "diana", 95.0});
+  }
+
+  // score > 80 AND score < 93
+  auto records = file.Read<SimpleEntry>()
+                     .Filter(&SimpleEntry::score, basis_rs::Gt, 80.0)
+                     .Filter(&SimpleEntry::score, basis_rs::Lt, 93.0)
+                     .Collect();
+
+  ASSERT_EQ(records.size(), 2); // alice (85.5) and bob (92.0)
+  EXPECT_EQ(records[0].name, "alice");
+  EXPECT_EQ(records[1].name, "bob");
+}
+
+TEST_F(ParquetCodecTest, QueryNoFilterNoSelect)
+{
+  auto path = temp_dir_ / "query_identity.parquet";
+  basis_rs::ParquetFile file(path);
+
+  {
+    auto writer = file.SpawnWriter<SimpleEntry>();
+    writer.WriteRecord({1, "alice", 85.5});
+  }
+
+  // Query with no Select/Filter should behave like ReadAll
+  auto records = file.Read<SimpleEntry>().Collect();
+
+  ASSERT_EQ(records.size(), 1);
+  EXPECT_EQ(records[0].id, 1);
+  EXPECT_EQ(records[0].name, "alice");
+  EXPECT_DOUBLE_EQ(records[0].score, 85.5);
 }

@@ -28,6 +28,8 @@
  *   writer.WriteRecord(entry);
  */
 
+#include <algorithm>
+#include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -226,6 +228,12 @@ class ParquetCodec {
 
     column_names_.push_back(name);
 
+    // Store byte offset of the member pointer for later lookup
+    RecordType dummy{};
+    auto offset = reinterpret_cast<const char*>(&(dummy.*accessor)) -
+                  reinterpret_cast<const char*>(&dummy);
+    column_offsets_.push_back(offset);
+
     // Store reader lambda
     column_readers_.push_back(
         [name, accessor](const ffi::ParquetReader& reader,
@@ -272,8 +280,38 @@ class ParquetCodec {
   /// Get column names.
   const std::vector<std::string>& column_names() const { return column_names_; }
 
+  /// Look up column name by member pointer.
+  template <typename T, typename SuperType>
+  std::string FindColumnName(T SuperType::*accessor) const {
+    RecordType dummy{};
+    auto target = reinterpret_cast<const char*>(&(dummy.*accessor)) -
+                  reinterpret_cast<const char*>(&dummy);
+    for (size_t i = 0; i < column_offsets_.size(); ++i) {
+      if (column_offsets_[i] == target) {
+        return column_names_[i];
+      }
+    }
+    throw std::runtime_error("Member pointer not registered in codec");
+  }
+
+  /// Read only selected columns (by index). Unselected fields keep default
+  /// values.
+  std::vector<RecordType> ReadSelected(
+      const ffi::ParquetReader& reader,
+      const std::vector<size_t>& column_indices) const {
+    size_t num_rows = ffi::parquet_reader_num_rows(reader);
+    std::vector<RecordType> records(num_rows);
+
+    for (size_t idx : column_indices) {
+      column_readers_[idx](reader, records);
+    }
+
+    return records;
+  }
+
  private:
   std::vector<std::string> column_names_;
+  std::vector<std::ptrdiff_t> column_offsets_;
   std::vector<ReaderFunc> column_readers_;
   std::vector<WriterFunc> column_writers_;
 };
@@ -338,6 +376,161 @@ class ParquetWriter {
   bool finalized_;
 };
 
+// ==================== FilterOp Aliases ====================
+
+inline constexpr auto Eq = ffi::FilterOp::Eq;
+inline constexpr auto Ne = ffi::FilterOp::Ne;
+inline constexpr auto Lt = ffi::FilterOp::Lt;
+inline constexpr auto Le = ffi::FilterOp::Le;
+inline constexpr auto Gt = ffi::FilterOp::Gt;
+inline constexpr auto Ge = ffi::FilterOp::Ge;
+
+// ==================== ParquetQuery ====================
+
+// Forward declaration
+class ParquetFile;
+
+template <typename RecordType>
+class ParquetQuery {
+ public:
+  explicit ParquetQuery(std::filesystem::path path) : path_(std::move(path)) {}
+
+  /// Select specific fields by member pointer (variadic).
+  template <typename... MemberPtrs>
+  ParquetQuery& Select(MemberPtrs... ptrs) {
+    const auto& codec = GetParquetCodec<RecordType>();
+    (select_names_.push_back(codec.FindColumnName(ptrs)), ...);
+    return *this;
+  }
+
+  /// Select specific columns by name.
+  ParquetQuery& Select(std::initializer_list<std::string> names) {
+    for (const auto& name : names) {
+      select_names_.push_back(name);
+    }
+    return *this;
+  }
+
+  /// Add a typed filter predicate using member pointer.
+  template <typename T, typename SuperType>
+  ParquetQuery& Filter(T SuperType::*accessor, ffi::FilterOp op,
+                        const T& value) {
+    const auto& codec = GetParquetCodec<RecordType>();
+    std::string col_name = codec.FindColumnName(accessor);
+    AddFilter(col_name, op, value);
+    return *this;
+  }
+
+  /// Execute query and return records.
+  std::vector<RecordType> Collect() const {
+    auto query = ffi::parquet_query_new(path_.string());
+
+    const auto& codec = GetParquetCodec<RecordType>();
+    std::vector<std::string> effective_columns;
+    std::vector<size_t> selected_indices;
+
+    if (select_names_.empty()) {
+      // No explicit Select() — use all codec columns (projection pushdown)
+      effective_columns = codec.column_names();
+      for (size_t i = 0; i < effective_columns.size(); ++i) {
+        selected_indices.push_back(i);
+      }
+    } else {
+      effective_columns = select_names_;
+      // Map names to codec indices for ReadSelected
+      const auto& all_names = codec.column_names();
+      for (const auto& sel : select_names_) {
+        for (size_t i = 0; i < all_names.size(); ++i) {
+          if (all_names[i] == sel) {
+            selected_indices.push_back(i);
+            break;
+          }
+        }
+      }
+    }
+
+    // Include filter columns in scan projection even if not selected
+    std::vector<std::string> scan_columns = effective_columns;
+    for (const auto& f : filter_entries_) {
+      if (std::find(scan_columns.begin(), scan_columns.end(), f.column) ==
+          scan_columns.end()) {
+        scan_columns.push_back(f.column);
+      }
+    }
+
+    // Set projection
+    {
+      rust::Vec<rust::String> cols;
+      cols.reserve(scan_columns.size());
+      for (const auto& name : scan_columns) {
+        cols.push_back(rust::String(name));
+      }
+      ffi::parquet_query_select(*query, std::move(cols));
+    }
+
+    // Apply filters
+    for (const auto& f : filter_entries_) {
+      f.apply(*query);
+    }
+
+    // Collect and read
+    auto reader = ffi::parquet_query_collect(std::move(query));
+
+    if (select_names_.empty()) {
+      return codec.ReadAll(*reader);
+    } else {
+      return codec.ReadSelected(*reader, selected_indices);
+    }
+  }
+
+ private:
+  struct FilterEntry {
+    std::string column;
+    ffi::FilterOp op;
+    std::function<void(ffi::ParquetQuery&)> apply;
+  };
+
+  template <typename T>
+  void AddFilter(const std::string& col_name, ffi::FilterOp op,
+                 const T& value) {
+    FilterEntry entry;
+    entry.column = col_name;
+    entry.op = op;
+    if constexpr (std::is_same_v<T, int64_t>) {
+      entry.apply = [col_name, op, value](ffi::ParquetQuery& q) {
+        ffi::parquet_query_filter_i64(q, col_name, op, value);
+      };
+    } else if constexpr (std::is_same_v<T, int32_t>) {
+      entry.apply = [col_name, op, value](ffi::ParquetQuery& q) {
+        ffi::parquet_query_filter_i32(q, col_name, op, value);
+      };
+    } else if constexpr (std::is_same_v<T, double>) {
+      entry.apply = [col_name, op, value](ffi::ParquetQuery& q) {
+        ffi::parquet_query_filter_f64(q, col_name, op, value);
+      };
+    } else if constexpr (std::is_same_v<T, float>) {
+      entry.apply = [col_name, op, value](ffi::ParquetQuery& q) {
+        ffi::parquet_query_filter_f32(q, col_name, op, value);
+      };
+    } else if constexpr (std::is_same_v<T, std::string>) {
+      entry.apply = [col_name, op, value](ffi::ParquetQuery& q) {
+        ffi::parquet_query_filter_str(q, col_name, op, value);
+      };
+    } else if constexpr (std::is_same_v<T, bool>) {
+      entry.apply = [col_name, op, value](ffi::ParquetQuery& q) {
+        ffi::parquet_query_filter_bool(q, col_name, op, value);
+      };
+    } else {
+      static_assert(!std::is_same_v<T, T>, "Unsupported filter type");
+    }
+    filter_entries_.push_back(std::move(entry));
+  }
+
+  std::filesystem::path path_;
+  std::vector<std::string> select_names_;
+  std::vector<FilterEntry> filter_entries_;
+};
+
 // ==================== ParquetFile ====================
 
 class ParquetFile {
@@ -350,11 +543,25 @@ class ParquetFile {
   /// Get the file path.
   const std::filesystem::path& path() const { return path_; }
 
-  /// Read all records of type RecordType.
+  /// Read all records of type RecordType (with automatic column projection).
   template <typename RecordType>
   std::vector<RecordType> ReadAll() const {
-    auto reader = ffi::parquet_reader_open(path_.string());
-    return GetParquetCodec<RecordType>().ReadAll(*reader);
+    const auto& codec = GetParquetCodec<RecordType>();
+    const auto& names = codec.column_names();
+    rust::Vec<rust::String> columns;
+    columns.reserve(names.size());
+    for (const auto& name : names) {
+      columns.push_back(rust::String(name));
+    }
+    auto reader =
+        ffi::parquet_reader_open_projected(path_.string(), std::move(columns));
+    return codec.ReadAll(*reader);
+  }
+
+  /// Start building a query for the given record type.
+  template <typename RecordType>
+  ParquetQuery<RecordType> Read() const {
+    return ParquetQuery<RecordType>(path_);
   }
 
   /// Spawn a writer for the given record type.
