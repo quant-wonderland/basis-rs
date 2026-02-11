@@ -15,6 +15,7 @@ cxx = "1.0"
 
 [dev-dependencies]
 tempfile = "3.15"
+polars = { version = "0.46", features = ["parquet", "lazy"] }
 
 [build-dependencies]
 cxx-build = "1.0"

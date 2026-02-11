@@ -26,13 +26,29 @@ mod ffi {
         dtype: ColumnType,
     }
 
+    /// Filter comparison operator shared between Rust and C++.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum FilterOp {
+        Eq,
+        Ne,
+        Lt,
+        Le,
+        Gt,
+        Ge,
+    }
+
     extern "Rust" {
         // Opaque Rust types
         type ParquetReader;
         type ParquetWriter;
+        type ParquetQuery;
 
         // Reader functions
         fn parquet_reader_open(path: &str) -> Result<Box<ParquetReader>>;
+        fn parquet_reader_open_projected(
+            path: &str,
+            columns: Vec<String>,
+        ) -> Result<Box<ParquetReader>>;
         fn parquet_reader_num_rows(reader: &ParquetReader) -> usize;
         fn parquet_reader_num_cols(reader: &ParquetReader) -> usize;
         fn parquet_reader_columns(reader: &ParquetReader) -> Vec<ColumnInfo>;
@@ -96,6 +112,47 @@ mod ffi {
             data: &[bool],
         ) -> Result<()>;
         fn parquet_writer_finish(writer: Box<ParquetWriter>) -> Result<()>;
+
+        // Query builder functions (lazy evaluation with predicate/projection pushdown)
+        fn parquet_query_new(path: &str) -> Result<Box<ParquetQuery>>;
+        fn parquet_query_select(query: &mut ParquetQuery, columns: Vec<String>);
+        fn parquet_query_filter_i64(
+            query: &mut ParquetQuery,
+            column: &str,
+            op: FilterOp,
+            value: i64,
+        );
+        fn parquet_query_filter_i32(
+            query: &mut ParquetQuery,
+            column: &str,
+            op: FilterOp,
+            value: i32,
+        );
+        fn parquet_query_filter_f64(
+            query: &mut ParquetQuery,
+            column: &str,
+            op: FilterOp,
+            value: f64,
+        );
+        fn parquet_query_filter_f32(
+            query: &mut ParquetQuery,
+            column: &str,
+            op: FilterOp,
+            value: f32,
+        );
+        fn parquet_query_filter_str(
+            query: &mut ParquetQuery,
+            column: &str,
+            op: FilterOp,
+            value: &str,
+        );
+        fn parquet_query_filter_bool(
+            query: &mut ParquetQuery,
+            column: &str,
+            op: FilterOp,
+            value: bool,
+        );
+        fn parquet_query_collect(query: Box<ParquetQuery>) -> Result<Box<ParquetReader>>;
     }
 }
 
@@ -117,6 +174,19 @@ fn parquet_reader_open(path: &str) -> Result<Box<ParquetReader>, String> {
     let df = PolarsReader::new(path)
         .read()
         .map_err(|e| e.to_string())?;
+    Ok(Box::new(ParquetReader { df }))
+}
+
+fn parquet_reader_open_projected(
+    path: &str,
+    columns: Vec<String>,
+) -> Result<Box<ParquetReader>, String> {
+    let df = if columns.is_empty() {
+        PolarsReader::new(path).read()
+    } else {
+        PolarsReader::new(path).with_columns(columns).read()
+    }
+    .map_err(|e| e.to_string())?;
     Ok(Box::new(ParquetReader { df }))
 }
 
@@ -309,6 +379,134 @@ fn parquet_writer_add_bool_column(
     writer.columns.insert(name.to_string(), series);
     writer.column_order.push(name.to_string());
     Ok(())
+}
+
+// ==================== Query Builder Implementation ====================
+
+/// Lazy query builder. Accumulates select/filter, executes on collect().
+pub struct ParquetQuery {
+    path: String,
+    columns: Vec<String>,
+    filters: Vec<Expr>,
+}
+
+fn make_filter_expr(column: &str, op: ffi::FilterOp, value: Expr) -> Expr {
+    let c = col(column);
+    if op == ffi::FilterOp::Eq {
+        c.eq(value)
+    } else if op == ffi::FilterOp::Ne {
+        c.neq(value)
+    } else if op == ffi::FilterOp::Lt {
+        c.lt(value)
+    } else if op == ffi::FilterOp::Le {
+        c.lt_eq(value)
+    } else if op == ffi::FilterOp::Gt {
+        c.gt(value)
+    } else if op == ffi::FilterOp::Ge {
+        c.gt_eq(value)
+    } else {
+        unreachable!()
+    }
+}
+
+fn parquet_query_new(path: &str) -> Result<Box<ParquetQuery>, String> {
+    if !std::path::Path::new(path).exists() {
+        return Err(format!("File not found: {}", path));
+    }
+    Ok(Box::new(ParquetQuery {
+        path: path.to_string(),
+        columns: Vec::new(),
+        filters: Vec::new(),
+    }))
+}
+
+fn parquet_query_select(query: &mut ParquetQuery, columns: Vec<String>) {
+    query.columns = columns;
+}
+
+fn parquet_query_filter_i64(
+    query: &mut ParquetQuery,
+    column: &str,
+    op: ffi::FilterOp,
+    value: i64,
+) {
+    query
+        .filters
+        .push(make_filter_expr(column, op, lit(value)));
+}
+
+fn parquet_query_filter_i32(
+    query: &mut ParquetQuery,
+    column: &str,
+    op: ffi::FilterOp,
+    value: i32,
+) {
+    query
+        .filters
+        .push(make_filter_expr(column, op, lit(value)));
+}
+
+fn parquet_query_filter_f64(
+    query: &mut ParquetQuery,
+    column: &str,
+    op: ffi::FilterOp,
+    value: f64,
+) {
+    query
+        .filters
+        .push(make_filter_expr(column, op, lit(value)));
+}
+
+fn parquet_query_filter_f32(
+    query: &mut ParquetQuery,
+    column: &str,
+    op: ffi::FilterOp,
+    value: f32,
+) {
+    query
+        .filters
+        .push(make_filter_expr(column, op, lit(value)));
+}
+
+fn parquet_query_filter_str(
+    query: &mut ParquetQuery,
+    column: &str,
+    op: ffi::FilterOp,
+    value: &str,
+) {
+    query
+        .filters
+        .push(make_filter_expr(column, op, lit(value.to_string())));
+}
+
+fn parquet_query_filter_bool(
+    query: &mut ParquetQuery,
+    column: &str,
+    op: ffi::FilterOp,
+    value: bool,
+) {
+    query
+        .filters
+        .push(make_filter_expr(column, op, lit(value)));
+}
+
+fn parquet_query_collect(query: Box<ParquetQuery>) -> Result<Box<ParquetReader>, String> {
+    let args = ScanArgsParquet::default();
+    let mut lf = LazyFrame::scan_parquet(&query.path, args).map_err(|e| e.to_string())?;
+
+    // Apply projection
+    if !query.columns.is_empty() {
+        let col_exprs: Vec<_> = query.columns.iter().map(|c| col(c.as_str())).collect();
+        lf = lf.select(col_exprs);
+    }
+
+    // Apply filters (AND-ed together)
+    for filter_expr in &query.filters {
+        lf = lf.filter(filter_expr.clone());
+    }
+
+    let df = lf.collect().map_err(|e| e.to_string())?;
+    Ok(Box::new(ParquetReader { df }))
 }
 
 fn parquet_writer_finish(writer: Box<ParquetWriter>) -> Result<(), String> {
