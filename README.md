@@ -48,7 +48,7 @@ let df = ParquetReader::new("data.parquet")
 ### Basic Usage — Define a struct and its codec
 
 ```cpp
-#include <basis_rs/parquet.hpp>
+#include <basis_rs/parquet/parquet.hpp>
 
 struct Trade {
     int64_t id;

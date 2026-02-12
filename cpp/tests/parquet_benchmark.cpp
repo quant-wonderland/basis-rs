@@ -1,4 +1,4 @@
-#include <basis_rs/parquet.hpp>
+#include <basis_rs/parquet/parquet.hpp>
 #include <chrono>
 #include <iostream>
 

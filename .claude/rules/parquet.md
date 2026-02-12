@@ -3,8 +3,8 @@ paths:
   - "src/lib.rs"
   - "src/parquet.rs"
   - "src/cxx_bridge.rs"
-  - "include/basis_rs/parquet.hpp"
-  - "cpp/tests/parquet_codec_test.cpp"
+  - "include/basis_rs/parquet/*.hpp"
+  - "cpp/tests/parquet_test.cpp"
   - "cpp/tests/parquet_benchmark.cpp"
 ---
 
@@ -12,8 +12,8 @@ paths:
 
 Parquet file I/O using Polars, exposed to C++ via CXX bridge. The module provides two APIs:
 
-1. **New Zero-Copy API** (recommended): `DataFrame` class provides direct pointer access to column data
-2. **Legacy API**: `ParquetFile`/`ParquetCodec` with automatic struct conversion
+1. **DataFrame API** (recommended): Zero-copy column access via `DataFrame` class (~20x faster)
+2. **Query Builder API**: Struct-based reads with filter/select via `ParquetFile` and `ParquetQuery`
 
 ## Performance
 
@@ -26,9 +26,9 @@ On a 637MB parquet file with 20M rows and 49 columns:
 | Column iteration (sum) | 47ms | Iterate 20M floats |
 | Row iteration (chunk-wise) | 67ms | Process rows via chunks |
 | ReadAllAs<T> | 503ms | Convert to struct vector |
-| Legacy ReadAll | 1162ms | Old API |
+| Query builder | ~1100ms | ParquetFile.Read().Collect() |
 
-**Speedup: ~20x** for column-oriented workloads, **~2.3x** for struct-based ReadAll.
+**Speedup: ~20x** for column-oriented workloads via DataFrame zero-copy API.
 
 ## Key Files
 
@@ -36,15 +36,15 @@ On a 637MB parquet file with 20M rows and 49 columns:
 |------|------|
 | `src/lib.rs` | Crate entry point: re-exports `ParquetError`, `ParquetReader`, `ParquetWriter` |
 | `src/parquet.rs` | Rust public API: builder pattern readers/writers |
-| `src/cxx_bridge.rs` | CXX FFI layer: `ParquetDataFrame` (zero-copy), `ParquetReader` (legacy), `ParquetQuery` |
-| `include/basis_rs/parquet.hpp` | C++ API: `DataFrame`, `ColumnAccessor<T>`, `ParquetCodec<T>`, `ParquetFile`, `ParquetQuery<T>` |
-| `cpp/tests/parquet_codec_test.cpp` | Unit tests |
+| `src/cxx_bridge.rs` | CXX FFI layer: `ParquetDataFrame` (zero-copy), `ParquetReader`, `ParquetQuery` |
+| `include/basis_rs/parquet/parquet.hpp` | Main C++ API header |
+| `cpp/tests/parquet_test.cpp` | Unit tests (27 test cases) |
 | `cpp/tests/parquet_benchmark.cpp` | Performance benchmark |
 
-## New Zero-Copy API
+## DataFrame API (Zero-Copy)
 
 ```cpp
-#include <basis_rs/parquet.hpp>
+#include <basis_rs/parquet/parquet.hpp>
 
 // Open file with column projection
 basis_rs::DataFrame df("data.parquet", {"StockId", "Close", "High", "Low"});
@@ -89,7 +89,7 @@ auto records = df.ReadAllAs<TickData>();
 - String columns still require allocation (use `GetStringColumn()`)
 - DateTime columns are stored as int64_t milliseconds (use `GetDateTimeColumn()`)
 
-## Legacy API (Struct-based)
+## Query Builder API (Struct-based)
 
 ```cpp
 // Define struct and codec
@@ -109,14 +109,19 @@ inline const basis_rs::ParquetCodec<TickData>& basis_rs::GetParquetCodec() {
     return codec;
 }
 
-// Read all records
+// Read all records via query builder
 basis_rs::ParquetFile file("data.parquet");
-auto records = file.ReadAll<TickData>();
+auto records = file.Read<TickData>().Collect();
 
 // Query with filter
 auto filtered = file.Read<TickData>()
     .Filter(&TickData::close, basis_rs::Gt, 10.0f)
     .Collect();
+
+// Write records
+auto writer = file.SpawnWriter<TickData>();
+writer.WriteRecord({123, 45.6f});
+writer.Finish();
 ```
 
 ## Architecture
