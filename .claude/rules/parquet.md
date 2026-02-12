@@ -3,7 +3,8 @@ paths:
   - "src/lib.rs"
   - "src/parquet.rs"
   - "src/cxx_bridge.rs"
-  - "include/basis_rs/parquet/*.hpp"
+  - "include/basis_rs/parquet/parquet.hpp"
+  - "include/basis_rs/parquet/detail/*.hpp"
   - "cpp/tests/parquet_test.cpp"
   - "cpp/tests/parquet_benchmark.cpp"
 ---
@@ -37,7 +38,12 @@ On a 637MB parquet file with 20M rows and 49 columns:
 | `src/lib.rs` | Crate entry point: re-exports `ParquetError`, `ParquetReader`, `ParquetWriter` |
 | `src/parquet.rs` | Rust public API: builder pattern readers/writers |
 | `src/cxx_bridge.rs` | CXX FFI layer: `ParquetDataFrame` (zero-copy), `ParquetReader`, `ParquetQuery` |
-| `include/basis_rs/parquet/parquet.hpp` | Main C++ API header |
+| `include/basis_rs/parquet/parquet.hpp` | Main C++ API header (user-facing: DataFrame, ParquetFile, ParquetWriter) |
+| `include/basis_rs/parquet/detail/column_accessor.hpp` | ColumnAccessor, ColumnIterator, ColumnChunkView |
+| `include/basis_rs/parquet/detail/codec.hpp` | ParquetCodec for struct-column mapping |
+| `include/basis_rs/parquet/detail/query.hpp` | ParquetQuery builder |
+| `include/basis_rs/parquet/detail/cell_codec.hpp` | ParquetCellCodec FFI type specializations |
+| `include/basis_rs/parquet/detail/type_traits.hpp` | ParquetTypeOf type traits |
 | `cpp/tests/parquet_test.cpp` | Unit tests (27 test cases) |
 | `cpp/tests/parquet_benchmark.cpp` | Performance benchmark |
 
@@ -52,15 +58,18 @@ basis_rs::DataFrame df("data.parquet", {"StockId", "Close", "High", "Low"});
 // Zero-copy column access
 auto close = df.GetColumn<float>("Close");
 
-// Column-wise iteration (fastest)
+// Simple range-for loop (recommended)
 double sum = 0;
-for (const auto& chunk : close) {
-    for (size_t i = 0; i < chunk.size(); ++i) {
-        sum += chunk[i];
-    }
+for (float value : close) {
+    sum += value;
 }
 
-// Row-wise iteration via chunks (recommended)
+// Index-based access (O(log n) chunk lookup)
+for (size_t i = 0; i < close.size(); ++i) {
+    process(close[i]);
+}
+
+// Chunk-aware iteration (advanced, best cache locality)
 auto high = df.GetColumn<float>("High");
 auto low = df.GetColumn<float>("Low");
 for (size_t c = 0; c < high.NumChunks(); ++c) {
@@ -79,13 +88,19 @@ auto records = df.ReadAllAs<TickData>();
 ### Key Classes
 
 - **`DataFrame`**: Owns the Rust DataFrame, provides `GetColumn<T>()` and `ReadAllAs<T>()`
-- **`ColumnAccessor<T>`**: Zero-copy access to column data (may have multiple chunks)
+- **`ColumnAccessor<T>`**: Zero-copy access to column data with seamless cross-chunk iteration
+  - `begin()/end()`: Forward iterator for range-for loops
+  - `operator[]`: O(log n) random access via binary search
+  - `at()`: Bounds-checked access
+  - `NumChunks()/Chunk(i)`: Advanced chunk-aware access
+- **`ColumnIterator<T>`**: Forward iterator that traverses across multiple chunks seamlessly
 - **`ColumnChunkView<T>`**: View into a contiguous memory chunk
 
 ### Important Notes
 
 - Column pointers are only valid while `DataFrame` is alive
-- Use chunk iteration for best performance (avoids cross-chunk index lookups)
+- Range-for loop is recommended for most use cases (simple and efficient)
+- Use chunk-aware iteration (`NumChunks()/Chunk()`) for maximum cache locality with multiple columns
 - String columns still require allocation (use `GetStringColumn()`)
 - DateTime columns are stored as int64_t milliseconds (use `GetDateTimeColumn()`)
 
@@ -126,6 +141,19 @@ writer.Finish();
 
 ## Architecture
 
+### Header Structure
+
+```
+include/basis_rs/parquet/
+├── parquet.hpp              # Main public header (DataFrame, ParquetFile, ParquetWriter)
+└── detail/                  # Implementation details
+    ├── column_accessor.hpp  # ColumnAccessor, ColumnIterator, ColumnChunkView
+    ├── codec.hpp            # ParquetCodec
+    ├── query.hpp            # ParquetQuery
+    ├── cell_codec.hpp       # ParquetCellCodec specializations
+    └── type_traits.hpp      # ParquetTypeOf
+```
+
 ### Zero-Copy Data Flow
 ```
 C++ DataFrame
@@ -141,27 +169,27 @@ C++ DataFrame
 ```
 C++ ReadAllAs<T>()
   -> ParquetCodec<T>::ReadAllFromDf()
-    -> For each column: GetColumn<T>() -> iterate chunks -> copy to struct fields
+    -> For each column: GetColumn<T>() -> iterate via range-for -> copy to struct fields
 ```
 
 ## Type Mapping
 
 | C++ | CXX | Rust/Polars | Zero-copy |
 |-----|-----|-------------|-----------|
-| `int32_t` | `i32` | `Int32` | ✓ |
-| `int64_t` | `i64` | `Int64` | ✓ |
-| `uint64_t` | `u64` | `UInt64` | ✓ |
-| `float` | `f32` | `Float32` | ✓ |
-| `double` | `f64` | `Float64` | ✓ |
-| `std::string` | `String` | `String` | ✗ (allocation) |
-| `bool` | `bool` | `Boolean` | ✗ (bit-packed) |
-| DateTime | `i64` (ms) | `Datetime` | ✓ |
+| `int32_t` | `i32` | `Int32` | Yes |
+| `int64_t` | `i64` | `Int64` | Yes |
+| `uint64_t` | `u64` | `UInt64` | Yes |
+| `float` | `f32` | `Float32` | Yes |
+| `double` | `f64` | `Float64` | Yes |
+| `std::string` | `String` | `String` | No (allocation) |
+| `bool` | `bool` | `Boolean` | No (bit-packed) |
+| DateTime | `i64` (ms) | `Datetime` | Yes |
 
 ## Adding a New Column Type
 
 1. Add `parquet_df_get_<type>_chunks()` in `cxx_bridge.rs`
 2. Add `DataFrame::GetColumn<Type>()` specialization in `parquet.hpp`
-3. Add `ParquetCellCodec<Type>` for legacy API support
+3. Add `ParquetCellCodec<Type>` in `detail/cell_codec.hpp` for legacy API support
 4. Add tests
 
 ## Testing
