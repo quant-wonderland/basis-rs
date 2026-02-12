@@ -222,17 +222,17 @@ TEST_F(ParquetTest, ColumnAccessorBasic)
   basis_rs::DataFrame df(path);
 
   auto i32_col = df.GetColumn<int32_t>("i32_val");
-  EXPECT_EQ(i32_col.Size(), 3);
+  EXPECT_EQ(i32_col.size(), 3);
   EXPECT_GE(i32_col.NumChunks(), 1);
 
   auto i64_col = df.GetColumn<int64_t>("i64_val");
-  EXPECT_EQ(i64_col.Size(), 3);
+  EXPECT_EQ(i64_col.size(), 3);
 
   auto f32_col = df.GetColumn<float>("f32_val");
-  EXPECT_EQ(f32_col.Size(), 3);
+  EXPECT_EQ(f32_col.size(), 3);
 
   auto f64_col = df.GetColumn<double>("f64_val");
-  EXPECT_EQ(f64_col.Size(), 3);
+  EXPECT_EQ(f64_col.size(), 3);
 }
 
 TEST_F(ParquetTest, ColumnAccessorRandomAccess)
@@ -258,8 +258,8 @@ TEST_F(ParquetTest, ColumnAccessorRandomAccess)
   EXPECT_EQ(col[5], 5);
   EXPECT_EQ(col[9], 9);
 
-  // Test out of range
-  EXPECT_THROW(col[10], std::out_of_range);
+  // Test out of range with at()
+  EXPECT_THROW(col.at(10), std::out_of_range);
 }
 
 TEST_F(ParquetTest, ColumnAccessorIteration)
@@ -280,16 +280,21 @@ TEST_F(ParquetTest, ColumnAccessorIteration)
   basis_rs::DataFrame df(path);
   auto col = df.GetColumn<int32_t>("i32_val");
 
-  // Test chunk iteration
+  // Test seamless range-for iteration (new API)
   int64_t sum = 0;
-  for (const auto &chunk : col)
+  for (int32_t value : col)
   {
-    for (size_t i = 0; i < chunk.size(); ++i)
-    {
-      sum += chunk[i];
-    }
+    sum += value;
   }
   EXPECT_EQ(sum, 99 * 100 / 2); // Sum of 0..99
+
+  // Test index-based access
+  int64_t sum2 = 0;
+  for (size_t i = 0; i < col.size(); ++i)
+  {
+    sum2 += col[i];
+  }
+  EXPECT_EQ(sum2, 99 * 100 / 2);
 }
 
 // ==================== ColumnChunkView Tests ====================

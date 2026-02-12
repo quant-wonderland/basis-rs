@@ -9,18 +9,15 @@
  *
  *   basis_rs::DataFrame df("data.parquet");
  *
- *   // Column-wise iteration (fastest)
+ *   // Simple range-for loop (recommended)
  *   auto close_col = df.GetColumn<float>("Close");
- *   for (auto chunk : close_col) {
- *       for (size_t i = 0; i < chunk.size(); ++i) {
- *           sum += chunk[i];
- *       }
+ *   for (float value : close_col) {
+ *       sum += value;
  *   }
  *
- *   // Row-wise access via index
- *   for (size_t i = 0; i < df.NumRows(); ++i) {
- *       auto stock_id = stock_id_col[i];
- *       auto close = close_col[i];
+ *   // Index-based access
+ *   for (size_t i = 0; i < close_col.size(); ++i) {
+ *       process(close_col[i]);
  *   }
  *
  *   // Or use ReadAllAs<T> for convenience (copies data to structs)
