@@ -42,14 +42,13 @@ cargo test && cd build && ctest --output-on-failure
 - `include/basis_rs/` — public C++ headers
 - `cpp/tests/` — C++ gtest suite
 - `cmake/` — CMake package config + helpers (`Config.cmake.in`, `BuildHelpers.cmake`)
-- `examples/` — Rust example binaries
 - `.claude/rules/` — per-module Claude documentation
 
 ## Modules
 
 | Module | Rules file | Description |
 |--------|-----------|-------------|
-| parquet | `.claude/rules/parquet.md` | Parquet file I/O with column projection, query builder, lazy evaluation |
+| parquet | `.claude/rules/parquet.md` | Parquet I/O with zero-copy column access (~20x speedup), struct-based ReadAllAs, query builder with predicate pushdown |
 
 ## Adding a New Module
 

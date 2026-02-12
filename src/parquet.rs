@@ -58,7 +58,12 @@ impl<P: AsRef<Path>> ParquetReader<P> {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        self.columns = Some(columns.into_iter().map(|s| s.as_ref().to_string()).collect());
+        self.columns = Some(
+            columns
+                .into_iter()
+                .map(|s| s.as_ref().to_string())
+                .collect(),
+        );
         self
     }
 
