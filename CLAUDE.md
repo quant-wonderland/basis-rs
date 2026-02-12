@@ -39,7 +39,8 @@ cargo test && cd build && ctest --output-on-failure
   - `lib.rs` — crate entry, re-exports public API
   - `parquet.rs` — Parquet I/O with Polars (builder pattern)
   - `cxx_bridge.rs` — CXX bridge FFI layer
-- `include/basis_rs/` — public C++ headers
+- `include/basis_rs/` — public C++ headers (organized by module)
+  - `parquet/` — Parquet module headers
 - `cpp/tests/` — C++ gtest suite
 - `cmake/` — CMake package config + helpers (`Config.cmake.in`, `BuildHelpers.cmake`)
 - `.claude/rules/` — per-module Claude documentation
