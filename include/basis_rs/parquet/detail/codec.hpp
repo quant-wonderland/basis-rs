@@ -65,17 +65,15 @@ class ParquetCodec {
             // ParquetFile::ReadAll creates its own DataFrame
           });
     } else {
-      // Primitive types use zero-copy column access
+      // Primitive types use zero-copy column access with seamless iteration
       df_readers_.push_back(
           [name, accessor](const DataFrame& df,
                            std::vector<RecordType>& records) {
             auto col = df.template GetColumn<T>(name);
             size_t row = 0;
-            for (const auto& chunk : col) {
-              for (size_t i = 0; i < chunk.size() && row < records.size();
-                   ++i, ++row) {
-                records[row].*accessor = chunk[i];
-              }
+            for (const T& value : col) {
+              if (row >= records.size()) break;
+              records[row++].*accessor = value;
             }
           });
     }

@@ -76,10 +76,10 @@ int main() {
       auto close = df.GetColumn<float>("Close");
       auto high = df.GetColumn<float>("High");
       auto low = df.GetColumn<float>("Low");
-      (void)stock_id.Size();
-      (void)close.Size();
-      (void)high.Size();
-      (void)low.Size();
+      (void)stock_id.size();
+      (void)close.size();
+      (void)high.size();
+      (void)low.size();
     });
   }
 
@@ -91,16 +91,14 @@ int main() {
 
     column_sum_time = benchmark("Column sum (zero-copy)", [&close]() {
       double sum = 0;
-      for (const auto& chunk : close) {
-        for (size_t i = 0; i < chunk.size(); ++i) {
-          sum += chunk[i];
-        }
+      for (float value : close) {
+        sum += value;
       }
       (void)sum;
     });
   }
 
-  // Benchmark 3: Row-wise iteration (optimized via chunk)
+  // Benchmark 3: Row-wise iteration (chunk-aware for best performance)
   double row_iter_chunk_time = 0;
   {
     basis_rs::DataFrame df(TEST_FILE, {"StockId", "Close", "High", "Low"});
@@ -109,7 +107,7 @@ int main() {
 
     row_iter_chunk_time = benchmark("Row iteration (chunk-wise)", [&]() {
       float max_range = 0;
-      // Iterate through chunks in parallel for better cache locality
+      // Use chunk-aware iteration for maximum cache locality
       for (size_t c = 0; c < high.NumChunks(); ++c) {
         const auto& high_chunk = high.Chunk(c);
         const auto& low_chunk = low.Chunk(c);
@@ -136,7 +134,7 @@ int main() {
     row_iter_time = benchmark("Row iteration (via index, slower)", [&]() {
       float max_range = 0;
       size_t max_idx = 0;
-      for (size_t i = 0; i < stock_id.Size(); ++i) {
+      for (size_t i = 0; i < stock_id.size(); ++i) {
         float range = high[i] - low[i];
         if (range > max_range) {
           max_range = range;
