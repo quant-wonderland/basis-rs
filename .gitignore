@@ -13,3 +13,4 @@ support/
 .envrc
 result
 build/
+.cache/

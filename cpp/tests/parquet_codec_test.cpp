@@ -36,32 +36,7 @@ struct PartialEntry
   double score;
 };
 
-struct StockSliceInfo
-{
-  int32_t stock_id;
-  float bid1_price;
-  float ask1_price;
-  float ask5_price;
-  float bid5_price;
-};
-
 // ==================== Codec Registrations ====================
-
-template <>
-inline const basis_rs::ParquetCodec<StockSliceInfo> &basis_rs::GetParquetCodec()
-{
-  static basis_rs::ParquetCodec<StockSliceInfo> codec = []()
-  {
-    basis_rs::ParquetCodec<StockSliceInfo> c;
-    c.Add("StockId", &StockSliceInfo::stock_id);
-    c.Add("Bid1", &StockSliceInfo::bid1_price);
-    c.Add("Ask1", &StockSliceInfo::ask1_price);
-    c.Add("Ask5", &StockSliceInfo::ask5_price);
-    c.Add("Bid5", &StockSliceInfo::bid5_price);
-    return c;
-  }();
-  return codec;
-}
 
 template <>
 inline const basis_rs::ParquetCodec<SimpleEntry> &basis_rs::GetParquetCodec()
