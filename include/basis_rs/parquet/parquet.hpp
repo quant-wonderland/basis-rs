@@ -21,8 +21,12 @@
  *   for (float value : close_col) {
  *       sum += value;
  *   }
+ *   // Index-based access
+ *   for (size_t i = 0; i < close_col.size(); ++i) {
+ *       process(close_col[i]);
+ *   }
  *
- *   // Or convert to structs
+ *   // Or use ReadAllAs<T> for convenience (copies data to structs)
  *   auto records = df.ReadAllAs<TickData>();
  *
  * ## ParquetWriter
