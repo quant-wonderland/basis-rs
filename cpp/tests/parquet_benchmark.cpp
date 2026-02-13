@@ -50,8 +50,8 @@ int main() {
   std::cout << "=== C++ Parquet Performance Benchmark ===" << std::endl;
   std::cout << "Test file: " << TEST_FILE << std::endl << std::endl;
 
-  // Benchmark 1: New zero-copy DataFrame API
-  std::cout << "--- New Zero-Copy API ---" << std::endl;
+  // Benchmark 1: DataFrame API
+  std::cout << "--- DataFrame API ---" << std::endl;
 
   double df_open_time = benchmark("DataFrame open", []() {
     basis_rs::DataFrame df(TEST_FILE);
@@ -152,13 +152,15 @@ int main() {
     (void)records.size();
   });
 
-  // Benchmark 5: Legacy ParquetFile API
-  std::cout << std::endl << "--- Legacy API (for comparison) ---" << std::endl;
+  // Benchmark 5: DataFrame with Filter
+  std::cout << std::endl << "--- DataFrame with Filter ---" << std::endl;
 
-  double legacy_time = benchmark("ParquetFile::ReadAll<TickData>", []() {
-    basis_rs::ParquetFile file(TEST_FILE);
-    auto records = file.ReadAll<TickData>();
-    (void)records.size();
+  double filter_time = benchmark("DataFrame::Open().Filter().Collect()", []() {
+    auto df = basis_rs::DataFrame::Open(TEST_FILE)
+                  .Select({"StockId", "Close", "High", "Low"})
+                  .Filter("Close", basis_rs::Gt, 10.0f)
+                  .Collect();
+    (void)df.NumRows();
   });
 
   // Summary
@@ -172,13 +174,11 @@ int main() {
   std::cout << "Row iteration (chunk-wise): " << row_iter_chunk_time << " ms" << std::endl;
   std::cout << "Row iteration (index): " << row_iter_time << " ms" << std::endl;
   std::cout << "ReadAllAs: " << read_all_as_time << " ms" << std::endl;
-  std::cout << "Legacy ReadAll: " << legacy_time << " ms" << std::endl;
+  std::cout << "Filter query: " << filter_time << " ms" << std::endl;
 
   double total_new = df_open_projected_time + column_access_time;
   std::cout << std::endl
-            << "New API (open + access): " << total_new << " ms" << std::endl;
-  std::cout << "Speedup over legacy: " << (legacy_time / total_new) << "x"
-            << std::endl;
+            << "DataFrame (open + access): " << total_new << " ms" << std::endl;
 
   return 0;
 }

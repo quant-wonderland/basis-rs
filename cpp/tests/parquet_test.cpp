@@ -117,8 +117,7 @@ TEST_F(ParquetTest, DataFrameOpen)
 
   // Write test data first
   {
-    basis_rs::ParquetFile file(path);
-    auto writer = file.SpawnWriter<SimpleEntry>();
+    basis_rs::ParquetWriter<SimpleEntry> writer(path);
     writer.WriteRecord({1, "alice", 85.5});
     writer.WriteRecord({2, "bob", 92.0});
     writer.Finish();
@@ -136,8 +135,7 @@ TEST_F(ParquetTest, DataFrameProjected)
 
   // Write test data
   {
-    basis_rs::ParquetFile file(path);
-    auto writer = file.SpawnWriter<SimpleEntry>();
+    basis_rs::ParquetWriter<SimpleEntry> writer(path);
     writer.WriteRecord({1, "alice", 85.5});
     writer.WriteRecord({2, "bob", 92.0});
     writer.Finish();
@@ -158,8 +156,7 @@ TEST_F(ParquetTest, DataFrameReadAllAs)
 
   // Write test data
   {
-    basis_rs::ParquetFile file(path);
-    auto writer = file.SpawnWriter<SimpleEntry>();
+    basis_rs::ParquetWriter<SimpleEntry> writer(path);
     writer.WriteRecord({1, "alice", 85.5});
     writer.WriteRecord({2, "bob", 92.0});
     writer.WriteRecord({3, "charlie", 78.5});
@@ -185,8 +182,7 @@ TEST_F(ParquetTest, DataFrameRechunk)
 
   // Write test data
   {
-    basis_rs::ParquetFile file(path);
-    auto writer = file.SpawnWriter<SimpleEntry>();
+    basis_rs::ParquetWriter<SimpleEntry> writer(path);
     for (int i = 0; i < 100; ++i)
     {
       writer.WriteRecord({i, "name", i * 1.0});
@@ -203,6 +199,44 @@ TEST_F(ParquetTest, DataFrameRechunk)
   EXPECT_EQ(df.NumRows(), 100);
 }
 
+TEST_F(ParquetTest, DataFrameOpenBuilder)
+{
+  auto path = temp_dir_ / "df_builder.parquet";
+
+  // Write test data
+  {
+    basis_rs::ParquetWriter<SimpleEntry> writer(path);
+    writer.WriteRecord({1, "alice", 85.5});
+    writer.WriteRecord({2, "bob", 92.0});
+    writer.Finish();
+  }
+
+  // Open with builder pattern (no filter)
+  auto df = basis_rs::DataFrame::Open(path).Collect();
+  EXPECT_EQ(df.NumRows(), 2);
+  EXPECT_EQ(df.NumCols(), 3);
+}
+
+TEST_F(ParquetTest, DataFrameOpenBuilderSelect)
+{
+  auto path = temp_dir_ / "df_builder_select.parquet";
+
+  // Write test data
+  {
+    basis_rs::ParquetWriter<SimpleEntry> writer(path);
+    writer.WriteRecord({1, "alice", 85.5});
+    writer.WriteRecord({2, "bob", 92.0});
+    writer.Finish();
+  }
+
+  // Open with builder pattern and column selection
+  auto df = basis_rs::DataFrame::Open(path)
+                .Select({"id", "score"})
+                .Collect();
+  EXPECT_EQ(df.NumRows(), 2);
+  EXPECT_EQ(df.NumCols(), 2);
+}
+
 // ==================== ColumnAccessor Tests ====================
 
 TEST_F(ParquetTest, ColumnAccessorBasic)
@@ -211,8 +245,7 @@ TEST_F(ParquetTest, ColumnAccessorBasic)
 
   // Write test data
   {
-    basis_rs::ParquetFile file(path);
-    auto writer = file.SpawnWriter<NumericEntry>();
+    basis_rs::ParquetWriter<NumericEntry> writer(path);
     writer.WriteRecord({1, 100, 1.5f, 2.5});
     writer.WriteRecord({2, 200, 2.5f, 3.5});
     writer.WriteRecord({3, 300, 3.5f, 4.5});
@@ -241,8 +274,7 @@ TEST_F(ParquetTest, ColumnAccessorRandomAccess)
 
   // Write test data
   {
-    basis_rs::ParquetFile file(path);
-    auto writer = file.SpawnWriter<NumericEntry>();
+    basis_rs::ParquetWriter<NumericEntry> writer(path);
     for (int i = 0; i < 10; ++i)
     {
       writer.WriteRecord({i, i * 10, i * 1.0f, i * 2.0});
@@ -268,8 +300,7 @@ TEST_F(ParquetTest, ColumnAccessorIteration)
 
   // Write test data
   {
-    basis_rs::ParquetFile file(path);
-    auto writer = file.SpawnWriter<NumericEntry>();
+    basis_rs::ParquetWriter<NumericEntry> writer(path);
     for (int i = 0; i < 100; ++i)
     {
       writer.WriteRecord({i, i, static_cast<float>(i), static_cast<double>(i)});
@@ -305,8 +336,7 @@ TEST_F(ParquetTest, ColumnChunkViewBasic)
 
   // Write test data
   {
-    basis_rs::ParquetFile file(path);
-    auto writer = file.SpawnWriter<NumericEntry>();
+    basis_rs::ParquetWriter<NumericEntry> writer(path);
     writer.WriteRecord({1, 100, 1.5f, 2.5});
     writer.WriteRecord({2, 200, 2.5f, 3.5});
     writer.Finish();
@@ -332,17 +362,16 @@ TEST_F(ParquetTest, ColumnChunkViewBasic)
 TEST_F(ParquetTest, ParquetWriterBasic)
 {
   auto path = temp_dir_ / "writer_basic.parquet";
-  basis_rs::ParquetFile file(path);
 
   {
-    auto writer = file.SpawnWriter<SimpleEntry>();
+    basis_rs::ParquetWriter<SimpleEntry> writer(path);
     writer.WriteRecord({1, "alice", 85.5});
     writer.WriteRecord({2, "bob", 92.0});
     EXPECT_EQ(writer.BufferSize(), 2);
     writer.Finish();
   }
 
-  EXPECT_TRUE(file.Exists());
+  EXPECT_TRUE(fs::exists(path));
 
   basis_rs::DataFrame df(path);
   EXPECT_EQ(df.NumRows(), 2);
@@ -351,10 +380,9 @@ TEST_F(ParquetTest, ParquetWriterBasic)
 TEST_F(ParquetTest, ParquetWriterDiscard)
 {
   auto path = temp_dir_ / "writer_discard.parquet";
-  basis_rs::ParquetFile file(path);
 
   {
-    auto writer = file.SpawnWriter<SimpleEntry>();
+    basis_rs::ParquetWriter<SimpleEntry> writer(path);
     writer.WriteRecord({1, "alice", 85.5});
     writer.WriteRecord({2, "bob", 92.0});
     EXPECT_EQ(writer.BufferSize(), 2);
@@ -362,13 +390,12 @@ TEST_F(ParquetTest, ParquetWriterDiscard)
   }
 
   // File should not exist after discard
-  EXPECT_FALSE(file.Exists());
+  EXPECT_FALSE(fs::exists(path));
 }
 
 TEST_F(ParquetTest, ParquetWriterWriteRecords)
 {
   auto path = temp_dir_ / "writer_records.parquet";
-  basis_rs::ParquetFile file(path);
 
   std::vector<SimpleEntry> entries = {
       {1, "a", 1.0},
@@ -377,7 +404,7 @@ TEST_F(ParquetTest, ParquetWriterWriteRecords)
   };
 
   {
-    auto writer = file.SpawnWriter<SimpleEntry>();
+    basis_rs::ParquetWriter<SimpleEntry> writer(path);
     writer.WriteRecords(entries);
     EXPECT_EQ(writer.BufferSize(), 3);
     writer.Finish();
@@ -398,8 +425,7 @@ TEST_F(ParquetTest, ParquetWriterAutoFinish)
   auto path = temp_dir_ / "writer_auto.parquet";
 
   {
-    basis_rs::ParquetFile file(path);
-    auto writer = file.SpawnWriter<SimpleEntry>();
+    basis_rs::ParquetWriter<SimpleEntry> writer(path);
     writer.WriteRecord({1, "test", 1.0});
     // Destructor should call Finish()
   }
@@ -413,10 +439,9 @@ TEST_F(ParquetTest, ParquetWriterAutoFinish)
 TEST_F(ParquetTest, NumericTypes)
 {
   auto path = temp_dir_ / "numeric.parquet";
-  basis_rs::ParquetFile file(path);
 
   {
-    auto writer = file.SpawnWriter<NumericEntry>();
+    basis_rs::ParquetWriter<NumericEntry> writer(path);
     writer.WriteRecord({-100, 1000000000000LL, 3.14f, 2.718281828});
     writer.WriteRecord({0, 0, 0.0f, 0.0});
     writer.WriteRecord({2147483647, -9223372036854775807LL, 1.0e38f, 1.0e308});
@@ -444,10 +469,9 @@ TEST_F(ParquetTest, NumericTypes)
 TEST_F(ParquetTest, EmptyStrings)
 {
   auto path = temp_dir_ / "empty_strings.parquet";
-  basis_rs::ParquetFile file(path);
 
   {
-    auto writer = file.SpawnWriter<SimpleEntry>();
+    basis_rs::ParquetWriter<SimpleEntry> writer(path);
     writer.WriteRecord({1, "", 0.0});
     writer.WriteRecord({2, "not empty", 1.0});
     writer.WriteRecord({3, "", 2.0});
@@ -466,10 +490,9 @@ TEST_F(ParquetTest, EmptyStrings)
 TEST_F(ParquetTest, UnicodeStrings)
 {
   auto path = temp_dir_ / "unicode.parquet";
-  basis_rs::ParquetFile file(path);
 
   {
-    auto writer = file.SpawnWriter<SimpleEntry>();
+    basis_rs::ParquetWriter<SimpleEntry> writer(path);
     writer.WriteRecord({1, "Hello World", 1.0});
     writer.WriteRecord({2, "你好世界", 2.0});
     writer.WriteRecord({3, "🎉🎊🎈", 3.0});
@@ -488,10 +511,9 @@ TEST_F(ParquetTest, UnicodeStrings)
 TEST_F(ParquetTest, GetStringColumn)
 {
   auto path = temp_dir_ / "string_col.parquet";
-  basis_rs::ParquetFile file(path);
 
   {
-    auto writer = file.SpawnWriter<SimpleEntry>();
+    basis_rs::ParquetWriter<SimpleEntry> writer(path);
     writer.WriteRecord({1, "alice", 1.0});
     writer.WriteRecord({2, "bob", 2.0});
     writer.Finish();
@@ -510,12 +532,11 @@ TEST_F(ParquetTest, GetStringColumn)
 TEST_F(ParquetTest, LargeDataset)
 {
   auto path = temp_dir_ / "large.parquet";
-  basis_rs::ParquetFile file(path);
 
   const size_t n = 100000;
 
   {
-    auto writer = file.SpawnWriter<SimpleEntry>();
+    basis_rs::ParquetWriter<SimpleEntry> writer(path);
     for (size_t i = 0; i < n; ++i)
     {
       writer.WriteRecord(
@@ -533,32 +554,6 @@ TEST_F(ParquetTest, LargeDataset)
   EXPECT_EQ(records[n - 1].id, static_cast<int64_t>(n - 1));
 }
 
-// ==================== ParquetFile Tests ====================
-
-TEST_F(ParquetTest, FileExists)
-{
-  auto path = temp_dir_ / "exists.parquet";
-  basis_rs::ParquetFile file(path);
-
-  EXPECT_FALSE(file.Exists());
-
-  {
-    auto writer = file.SpawnWriter<SimpleEntry>();
-    writer.WriteRecord({1, "test", 1.0});
-    writer.Finish();
-  }
-
-  EXPECT_TRUE(file.Exists());
-}
-
-TEST_F(ParquetTest, FilePath)
-{
-  auto path = temp_dir_ / "path_test.parquet";
-  basis_rs::ParquetFile file(path);
-
-  EXPECT_EQ(file.path(), path);
-}
-
 // ==================== Error Handling Tests ====================
 
 TEST_F(ParquetTest, OpenNonExistentFile)
@@ -574,104 +569,59 @@ TEST_F(ParquetTest, OpenNonExistentFileProjected)
       std::exception);
 }
 
-// ==================== Query Builder Tests ====================
+// ==================== DataFrame Filter Tests ====================
 
-TEST_F(ParquetTest, QuerySelectByMemberPointer)
+TEST_F(ParquetTest, DataFrameFilter)
 {
-  auto path = temp_dir_ / "query_select.parquet";
-  basis_rs::ParquetFile file(path);
+  auto path = temp_dir_ / "df_filter.parquet";
 
   {
-    auto writer = file.SpawnWriter<SimpleEntry>();
+    basis_rs::ParquetWriter<SimpleEntry> writer(path);
     writer.WriteRecord({1, "alice", 85.5});
     writer.WriteRecord({2, "bob", 92.0});
     writer.WriteRecord({3, "charlie", 78.5});
     writer.Finish();
   }
 
-  auto records = file.Read<SimpleEntry>()
-                     .Select(&SimpleEntry::id, &SimpleEntry::score)
-                     .Collect();
+  auto df = basis_rs::DataFrame::Open(path)
+                .Filter("score", basis_rs::Gt, 80.0)
+                .Collect();
 
-  ASSERT_EQ(records.size(), 3);
-  EXPECT_EQ(records[0].id, 1);
-  EXPECT_DOUBLE_EQ(records[0].score, 85.5);
-  EXPECT_EQ(records[0].name, ""); // not selected
-}
+  EXPECT_EQ(df.NumRows(), 2);
 
-TEST_F(ParquetTest, QuerySelectByName)
-{
-  auto path = temp_dir_ / "query_select_name.parquet";
-  basis_rs::ParquetFile file(path);
-
-  {
-    auto writer = file.SpawnWriter<SimpleEntry>();
-    writer.WriteRecord({1, "alice", 85.5});
-    writer.WriteRecord({2, "bob", 92.0});
-    writer.Finish();
-  }
-
-  auto records = file.Read<SimpleEntry>().Select({"id", "name"}).Collect();
-
-  ASSERT_EQ(records.size(), 2);
-  EXPECT_EQ(records[0].id, 1);
-  EXPECT_EQ(records[0].name, "alice");
-  EXPECT_DOUBLE_EQ(records[0].score, 0.0); // default
-}
-
-TEST_F(ParquetTest, QueryFilter)
-{
-  auto path = temp_dir_ / "query_filter.parquet";
-  basis_rs::ParquetFile file(path);
-
-  {
-    auto writer = file.SpawnWriter<SimpleEntry>();
-    writer.WriteRecord({1, "alice", 85.5});
-    writer.WriteRecord({2, "bob", 92.0});
-    writer.WriteRecord({3, "charlie", 78.5});
-    writer.Finish();
-  }
-
-  auto records = file.Read<SimpleEntry>()
-                     .Filter(&SimpleEntry::score, basis_rs::Gt, 80.0)
-                     .Collect();
-
+  auto records = df.ReadAllAs<SimpleEntry>();
   ASSERT_EQ(records.size(), 2);
   EXPECT_EQ(records[0].name, "alice");
   EXPECT_EQ(records[1].name, "bob");
 }
 
-TEST_F(ParquetTest, QuerySelectAndFilter)
+TEST_F(ParquetTest, DataFrameSelectAndFilter)
 {
-  auto path = temp_dir_ / "query_both.parquet";
-  basis_rs::ParquetFile file(path);
+  auto path = temp_dir_ / "df_select_filter.parquet";
 
   {
-    auto writer = file.SpawnWriter<SimpleEntry>();
+    basis_rs::ParquetWriter<SimpleEntry> writer(path);
     writer.WriteRecord({1, "alice", 85.5});
     writer.WriteRecord({2, "bob", 92.0});
     writer.WriteRecord({3, "charlie", 78.5});
     writer.Finish();
   }
 
-  auto records = file.Read<SimpleEntry>()
-                     .Select(&SimpleEntry::id, &SimpleEntry::score)
-                     .Filter(&SimpleEntry::score, basis_rs::Gt, 80.0)
-                     .Collect();
+  auto df = basis_rs::DataFrame::Open(path)
+                .Select({"id", "score"})
+                .Filter("score", basis_rs::Gt, 80.0)
+                .Collect();
 
-  ASSERT_EQ(records.size(), 2);
-  EXPECT_EQ(records[0].id, 1);
-  EXPECT_DOUBLE_EQ(records[0].score, 85.5);
-  EXPECT_EQ(records[0].name, ""); // not selected
+  EXPECT_EQ(df.NumRows(), 2);
+  EXPECT_EQ(df.NumCols(), 2);
 }
 
-TEST_F(ParquetTest, QueryMultipleFilters)
+TEST_F(ParquetTest, DataFrameMultipleFilters)
 {
-  auto path = temp_dir_ / "query_multi_filter.parquet";
-  basis_rs::ParquetFile file(path);
+  auto path = temp_dir_ / "df_multi_filter.parquet";
 
   {
-    auto writer = file.SpawnWriter<SimpleEntry>();
+    basis_rs::ParquetWriter<SimpleEntry> writer(path);
     writer.WriteRecord({1, "alice", 85.5});
     writer.WriteRecord({2, "bob", 92.0});
     writer.WriteRecord({3, "charlie", 78.5});
@@ -680,30 +630,35 @@ TEST_F(ParquetTest, QueryMultipleFilters)
   }
 
   // score > 80 AND score < 93
-  auto records = file.Read<SimpleEntry>()
-                     .Filter(&SimpleEntry::score, basis_rs::Gt, 80.0)
-                     .Filter(&SimpleEntry::score, basis_rs::Lt, 93.0)
-                     .Collect();
+  auto df = basis_rs::DataFrame::Open(path)
+                .Filter("score", basis_rs::Gt, 80.0)
+                .Filter("score", basis_rs::Lt, 93.0)
+                .Collect();
 
-  ASSERT_EQ(records.size(), 2); // alice (85.5) and bob (92.0)
+  EXPECT_EQ(df.NumRows(), 2); // alice (85.5) and bob (92.0)
+
+  auto records = df.ReadAllAs<SimpleEntry>();
+  ASSERT_EQ(records.size(), 2);
   EXPECT_EQ(records[0].name, "alice");
   EXPECT_EQ(records[1].name, "bob");
 }
 
-TEST_F(ParquetTest, QueryNoFilterNoSelect)
+TEST_F(ParquetTest, DataFrameNoFilter)
 {
-  auto path = temp_dir_ / "query_identity.parquet";
-  basis_rs::ParquetFile file(path);
+  auto path = temp_dir_ / "df_no_filter.parquet";
 
   {
-    auto writer = file.SpawnWriter<SimpleEntry>();
+    basis_rs::ParquetWriter<SimpleEntry> writer(path);
     writer.WriteRecord({1, "alice", 85.5});
     writer.Finish();
   }
 
-  // Query with no Select/Filter should return all records
-  auto records = file.Read<SimpleEntry>().Collect();
+  // Open with builder but no filter should return all records
+  auto df = basis_rs::DataFrame::Open(path).Collect();
 
+  EXPECT_EQ(df.NumRows(), 1);
+
+  auto records = df.ReadAllAs<SimpleEntry>();
   ASSERT_EQ(records.size(), 1);
   EXPECT_EQ(records[0].id, 1);
   EXPECT_EQ(records[0].name, "alice");
