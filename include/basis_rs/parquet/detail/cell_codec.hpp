@@ -11,7 +11,7 @@
 
 namespace basis_rs {
 
-absl::TimeZone GetShanghaiTimeZone() {
+inline absl::TimeZone GetShanghaiTimeZone() {
   static absl::TimeZone tz_gmt8 = []() {
     absl::TimeZone tz_gmt8;
     absl::LoadTimeZone("Asia/Shanghai", &tz_gmt8);
@@ -20,11 +20,9 @@ absl::TimeZone GetShanghaiTimeZone() {
   return tz_gmt8;
 }
 
-/// Codec for reading/writing individual column types to Parquet via FFI.
+/// Codec for writing individual column types to Parquet via FFI.
 template <typename T>
 struct ParquetCellCodec {
-  static std::vector<T> Read(const ffi::ParquetReader& reader,
-                             const std::string& name);
   static void Write(ffi::ParquetWriter& writer, const std::string& name,
                     const std::vector<T>& data);
 };
@@ -32,12 +30,6 @@ struct ParquetCellCodec {
 // Specialization: int64_t
 template <>
 struct ParquetCellCodec<int64_t> {
-  static std::vector<int64_t> Read(const ffi::ParquetReader& reader,
-                                   const std::string& name) {
-    auto rust_vec = ffi::parquet_reader_get_i64_column(reader, name);
-    return std::vector<int64_t>(rust_vec.begin(), rust_vec.end());
-  }
-
   static void Write(ffi::ParquetWriter& writer, const std::string& name,
                     const std::vector<int64_t>& data) {
     rust::Slice<const int64_t> slice(data.data(), data.size());
@@ -48,12 +40,6 @@ struct ParquetCellCodec<int64_t> {
 // Specialization: int32_t
 template <>
 struct ParquetCellCodec<int32_t> {
-  static std::vector<int32_t> Read(const ffi::ParquetReader& reader,
-                                   const std::string& name) {
-    auto rust_vec = ffi::parquet_reader_get_i32_column(reader, name);
-    return std::vector<int32_t>(rust_vec.begin(), rust_vec.end());
-  }
-
   static void Write(ffi::ParquetWriter& writer, const std::string& name,
                     const std::vector<int32_t>& data) {
     rust::Slice<const int32_t> slice(data.data(), data.size());
@@ -64,12 +50,6 @@ struct ParquetCellCodec<int32_t> {
 // Specialization: double
 template <>
 struct ParquetCellCodec<double> {
-  static std::vector<double> Read(const ffi::ParquetReader& reader,
-                                  const std::string& name) {
-    auto rust_vec = ffi::parquet_reader_get_f64_column(reader, name);
-    return std::vector<double>(rust_vec.begin(), rust_vec.end());
-  }
-
   static void Write(ffi::ParquetWriter& writer, const std::string& name,
                     const std::vector<double>& data) {
     rust::Slice<const double> slice(data.data(), data.size());
@@ -80,12 +60,6 @@ struct ParquetCellCodec<double> {
 // Specialization: float
 template <>
 struct ParquetCellCodec<float> {
-  static std::vector<float> Read(const ffi::ParquetReader& reader,
-                                 const std::string& name) {
-    auto rust_vec = ffi::parquet_reader_get_f32_column(reader, name);
-    return std::vector<float>(rust_vec.begin(), rust_vec.end());
-  }
-
   static void Write(ffi::ParquetWriter& writer, const std::string& name,
                     const std::vector<float>& data) {
     rust::Slice<const float> slice(data.data(), data.size());
@@ -96,17 +70,6 @@ struct ParquetCellCodec<float> {
 // Specialization: std::string
 template <>
 struct ParquetCellCodec<std::string> {
-  static std::vector<std::string> Read(const ffi::ParquetReader& reader,
-                                       const std::string& name) {
-    auto rust_vec = ffi::parquet_reader_get_string_column(reader, name);
-    std::vector<std::string> result;
-    result.reserve(rust_vec.size());
-    for (const auto& s : rust_vec) {
-      result.emplace_back(std::string(s));
-    }
-    return result;
-  }
-
   static void Write(ffi::ParquetWriter& writer, const std::string& name,
                     const std::vector<std::string>& data) {
     rust::Vec<rust::String> rust_vec;
@@ -121,12 +84,6 @@ struct ParquetCellCodec<std::string> {
 // Specialization: bool
 template <>
 struct ParquetCellCodec<bool> {
-  static std::vector<bool> Read(const ffi::ParquetReader& reader,
-                                const std::string& name) {
-    auto rust_vec = ffi::parquet_reader_get_bool_column(reader, name);
-    return std::vector<bool>(rust_vec.begin(), rust_vec.end());
-  }
-
   static void Write(ffi::ParquetWriter& writer, const std::string& name,
                     const std::vector<bool>& data) {
     // std::vector<bool> doesn't have contiguous storage, need to copy
@@ -144,20 +101,6 @@ struct ParquetCellCodec<bool> {
 template <AbseilCivilTime T>
 struct ParquetCellCodec<T> {
   static constexpr absl::Time baseline{};
-
-  static std::vector<T> Read(const ffi::ParquetReader& reader,
-                             const std::string& name) {
-    auto rust_vec = ffi::parquet_reader_get_i64_column(reader, name);
-    std::vector<T> result;
-    result.reserve(rust_vec.size());
-    for (int64_t ms : rust_vec) {
-      std::chrono::milliseconds time(ms);
-      absl::Time absl_time = baseline + absl::FromChrono(time);
-      result.push_back(
-          T{absl::ToCivilSecond(absl_time, GetShanghaiTimeZone())});
-    }
-    return result;
-  }
 
   static void Write(ffi::ParquetWriter& writer, const std::string& name,
                     const std::vector<T>& data) {

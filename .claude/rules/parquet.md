@@ -37,7 +37,7 @@ On a 637MB parquet file with 20M rows and 49 columns:
 |------|------|
 | `src/lib.rs` | Crate entry point: re-exports `ParquetError`, `ParquetReader`, `ParquetWriter` |
 | `src/parquet.rs` | Rust public API: builder pattern readers/writers |
-| `src/cxx_bridge.rs` | CXX FFI layer: `ParquetDataFrame` (zero-copy), `ParquetReader`, `ParquetQuery` |
+| `src/cxx_bridge.rs` | CXX FFI layer: `ParquetDataFrame` (zero-copy), `ParquetQuery`, `ParquetWriter` |
 | `include/basis_rs/parquet/parquet.hpp` | Main C++ API header (DataFrame, DataFrameBuilder, ParquetWriter) |
 | `include/basis_rs/parquet/detail/column_accessor.hpp` | ColumnAccessor, ColumnIterator, ColumnChunkView |
 | `include/basis_rs/parquet/detail/codec.hpp` | ParquetCodec for struct-column mapping |
@@ -216,7 +216,7 @@ C++ DataFrame::Open(path).Select(...).Filter(...).Collect()
 
 1. Add `parquet_df_get_<type>_chunks()` in `cxx_bridge.rs`
 2. Add `DataFrame::GetColumn<Type>()` specialization in `parquet.hpp`
-3. Add `ParquetCellCodec<Type>` in `detail/cell_codec.hpp` (Read + Write methods)
+3. Add `ParquetCellCodec<Type>::Write()` in `detail/cell_codec.hpp`
 4. Add `ParquetTypeOf<Type>` specialization in `detail/type_traits.hpp`
 5. Update `ParquetCodec::Add()` in `detail/codec.hpp` for df_readers_ lambda
 6. Add tests
@@ -234,7 +234,7 @@ struct ParquetTypeOf<T> {
 
 // cell_codec.hpp
 template <AbseilCivilTime T>
-struct ParquetCellCodec<T> { /* Read/Write with conversion */ };
+struct ParquetCellCodec<T> { /* Write with conversion */ };
 ```
 
 ## Testing

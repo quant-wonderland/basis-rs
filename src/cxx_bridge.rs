@@ -127,34 +127,15 @@ mod ffi {
         fn parquet_df_get_string_column(df: &ParquetDataFrame, column: &str)
             -> Result<Vec<String>>;
 
-        // ==================== Legacy API (for backward compatibility) ====================
+        /// Get bool column - returns all values (allocation required due to bit-packing).
+        fn parquet_df_get_bool_column(df: &ParquetDataFrame, column: &str)
+            -> Result<Vec<bool>>;
 
-        type ParquetReader;
+        // ==================== Writer API ====================
+
         type ParquetWriter;
         type ParquetQuery;
 
-        // Reader functions (legacy)
-        fn parquet_reader_open(path: &str) -> Result<Box<ParquetReader>>;
-        fn parquet_reader_open_projected(
-            path: &str,
-            columns: Vec<String>,
-        ) -> Result<Box<ParquetReader>>;
-        fn parquet_reader_num_rows(reader: &ParquetReader) -> usize;
-        fn parquet_reader_num_cols(reader: &ParquetReader) -> usize;
-        fn parquet_reader_columns(reader: &ParquetReader) -> Vec<ColumnInfo>;
-
-        // Column getters (legacy) - return owned vectors
-        fn parquet_reader_get_i64_column(reader: &ParquetReader, name: &str) -> Result<Vec<i64>>;
-        fn parquet_reader_get_i32_column(reader: &ParquetReader, name: &str) -> Result<Vec<i32>>;
-        fn parquet_reader_get_f64_column(reader: &ParquetReader, name: &str) -> Result<Vec<f64>>;
-        fn parquet_reader_get_f32_column(reader: &ParquetReader, name: &str) -> Result<Vec<f32>>;
-        fn parquet_reader_get_string_column(
-            reader: &ParquetReader,
-            name: &str,
-        ) -> Result<Vec<String>>;
-        fn parquet_reader_get_bool_column(reader: &ParquetReader, name: &str) -> Result<Vec<bool>>;
-
-        // Writer functions
         fn parquet_writer_new(path: &str) -> Result<Box<ParquetWriter>>;
         fn parquet_writer_add_i64_column(
             writer: &mut ParquetWriter,
@@ -232,9 +213,8 @@ mod ffi {
             op: FilterOp,
             value: bool,
         );
-        fn parquet_query_collect(query: Box<ParquetQuery>) -> Result<Box<ParquetReader>>;
 
-        /// New: collect into zero-copy DataFrame
+        /// Collect query into zero-copy DataFrame
         fn parquet_query_collect_df(query: Box<ParquetQuery>) -> Result<Box<ParquetDataFrame>>;
     }
 }
@@ -422,12 +402,24 @@ fn parquet_df_get_string_column(
     Ok(ca.iter().map(|opt| opt.unwrap_or("").to_string()).collect())
 }
 
-// ==================== Legacy Implementation ====================
+fn parquet_df_get_bool_column(
+    df: &ParquetDataFrame,
+    column: &str,
+) -> Result<Vec<bool>, String> {
+    let col = df
+        .df
+        .column(column)
+        .map_err(|e| format!("Column '{}' not found: {}", column, e))?;
 
-/// Wrapper around a Polars DataFrame loaded from a Parquet file.
-pub struct ParquetReader {
-    df: DataFrame,
+    let ca = col
+        .bool()
+        .map_err(|e| format!("Column '{}' is not Boolean: {}", column, e))?;
+
+    // Bools cannot be zero-copy due to bit-packing in Arrow
+    Ok(ca.iter().map(|opt| opt.unwrap_or(false)).collect())
 }
+
+// ==================== Writer Implementation ====================
 
 /// Wrapper for building and writing a Parquet file.
 pub struct ParquetWriter {
@@ -435,127 +427,6 @@ pub struct ParquetWriter {
     columns: HashMap<String, Series>,
     column_order: Vec<String>,
 }
-
-fn parquet_reader_open(path: &str) -> Result<Box<ParquetReader>, String> {
-    let df = PolarsReader::new(path).read().map_err(|e| e.to_string())?;
-    Ok(Box::new(ParquetReader { df }))
-}
-
-fn parquet_reader_open_projected(
-    path: &str,
-    columns: Vec<String>,
-) -> Result<Box<ParquetReader>, String> {
-    let df = if columns.is_empty() {
-        PolarsReader::new(path).read()
-    } else {
-        PolarsReader::new(path).with_columns(columns).read()
-    }
-    .map_err(|e| e.to_string())?;
-    Ok(Box::new(ParquetReader { df }))
-}
-
-fn parquet_reader_num_rows(reader: &ParquetReader) -> usize {
-    reader.df.height()
-}
-
-fn parquet_reader_num_cols(reader: &ParquetReader) -> usize {
-    reader.df.width()
-}
-
-fn parquet_reader_columns(reader: &ParquetReader) -> Vec<ffi::ColumnInfo> {
-    reader
-        .df
-        .get_columns()
-        .iter()
-        .map(|col| ffi::ColumnInfo {
-            name: col.name().to_string(),
-            dtype: dtype_to_column_type(col.dtype()),
-        })
-        .collect()
-}
-
-fn parquet_reader_get_i64_column(reader: &ParquetReader, name: &str) -> Result<Vec<i64>, String> {
-    let col = reader
-        .df
-        .column(name)
-        .map_err(|e| format!("Column '{}' not found: {}", name, e))?;
-
-    let ca = col
-        .i64()
-        .map_err(|e| format!("Column '{}' is not Int64: {}", name, e))?;
-
-    Ok(ca.iter().map(|opt| opt.unwrap_or(0)).collect())
-}
-
-fn parquet_reader_get_i32_column(reader: &ParquetReader, name: &str) -> Result<Vec<i32>, String> {
-    let col = reader
-        .df
-        .column(name)
-        .map_err(|e| format!("Column '{}' not found: {}", name, e))?;
-
-    let ca = col
-        .i32()
-        .map_err(|e| format!("Column '{}' is not Int32: {}", name, e))?;
-
-    Ok(ca.iter().map(|opt| opt.unwrap_or(0)).collect())
-}
-
-fn parquet_reader_get_f64_column(reader: &ParquetReader, name: &str) -> Result<Vec<f64>, String> {
-    let col = reader
-        .df
-        .column(name)
-        .map_err(|e| format!("Column '{}' not found: {}", name, e))?;
-
-    let ca = col
-        .f64()
-        .map_err(|e| format!("Column '{}' is not Float64: {}", name, e))?;
-
-    Ok(ca.iter().map(|opt| opt.unwrap_or(0.0)).collect())
-}
-
-fn parquet_reader_get_f32_column(reader: &ParquetReader, name: &str) -> Result<Vec<f32>, String> {
-    let col = reader
-        .df
-        .column(name)
-        .map_err(|e| format!("Column '{}' not found: {}", name, e))?;
-
-    let ca = col
-        .f32()
-        .map_err(|e| format!("Column '{}' is not Float32: {}", name, e))?;
-
-    Ok(ca.iter().map(|opt| opt.unwrap_or(0.0)).collect())
-}
-
-fn parquet_reader_get_string_column(
-    reader: &ParquetReader,
-    name: &str,
-) -> Result<Vec<String>, String> {
-    let col = reader
-        .df
-        .column(name)
-        .map_err(|e| format!("Column '{}' not found: {}", name, e))?;
-
-    let ca = col
-        .str()
-        .map_err(|e| format!("Column '{}' is not String: {}", name, e))?;
-
-    Ok(ca.iter().map(|opt| opt.unwrap_or("").to_string()).collect())
-}
-
-fn parquet_reader_get_bool_column(reader: &ParquetReader, name: &str) -> Result<Vec<bool>, String> {
-    let col = reader
-        .df
-        .column(name)
-        .map_err(|e| format!("Column '{}' not found: {}", name, e))?;
-
-    let ca = col
-        .bool()
-        .map_err(|e| format!("Column '{}' is not Boolean: {}", name, e))?;
-
-    Ok(ca.iter().map(|opt| opt.unwrap_or(false)).collect())
-}
-
-// ==================== Writer Implementation ====================
 
 fn parquet_writer_new(path: &str) -> Result<Box<ParquetWriter>, String> {
     Ok(Box::new(ParquetWriter {
@@ -741,11 +612,6 @@ fn execute_query(query: &ParquetQuery) -> Result<DataFrame, String> {
     }
 
     lf.collect().map_err(|e| e.to_string())
-}
-
-fn parquet_query_collect(query: Box<ParquetQuery>) -> Result<Box<ParquetReader>, String> {
-    let df = execute_query(&query)?;
-    Ok(Box::new(ParquetReader { df }))
 }
 
 fn parquet_query_collect_df(query: Box<ParquetQuery>) -> Result<Box<ParquetDataFrame>, String> {

@@ -69,49 +69,57 @@ inline const basis_rs::ParquetCodec<Trade>& basis_rs::GetParquetCodec() {
 }
 ```
 
-### ReadAll — Automatic column projection
+### ReadAllAs — Read into structs
 
-`ReadAll` automatically reads only the columns registered in the codec, even if the Parquet file has many more columns. This is a major performance win for wide tables.
+`ReadAllAs` automatically reads only the columns registered in the codec, even if the Parquet file has many more columns. This is a major performance win for wide tables.
 
 ```cpp
-basis_rs::ParquetFile file("trades.parquet");
-auto trades = file.ReadAll<Trade>();  // Only reads id, symbol, price from disk
+basis_rs::DataFrame df("trades.parquet");
+auto trades = df.ReadAllAs<Trade>();  // Only reads id, symbol, price from disk
 ```
 
 ### Query Builder — Select and Filter
 
-For more control, use the query builder to read specific fields or filter rows:
+For more control, use the query builder to read specific columns or filter rows:
 
 ```cpp
-// Read only id and price (symbol gets default value)
-auto trades = file.Read<Trade>()
-    .Select(&Trade::id, &Trade::price)
+// Read with column projection and filtering (predicate pushdown via Polars lazy scan)
+auto df = basis_rs::DataFrame::Open("trades.parquet")
+    .Select({"id", "price"})
+    .Filter("price", basis_rs::Gt, 100.0)
+    .Filter("price", basis_rs::Lt, 500.0)
     .Collect();
-
-// Filter rows — predicate pushdown via Polars lazy scan
-auto expensive = file.Read<Trade>()
-    .Filter(&Trade::price, basis_rs::Gt, 100.0)
-    .Collect();
-
-// Combine Select + Filter
-auto result = file.Read<Trade>()
-    .Select(&Trade::id, &Trade::price)
-    .Filter(&Trade::price, basis_rs::Gt, 100.0)
-    .Filter(&Trade::price, basis_rs::Lt, 500.0)
-    .Collect();
+auto trades = df.ReadAllAs<Trade>();
 ```
 
 Available filter operators: `basis_rs::Eq`, `Ne`, `Lt`, `Le`, `Gt`, `Ge`.
 
-Fields not included in `Select()` will have their default-constructed values (0, 0.0, "", false).
+### Zero-Copy Column Access
+
+For maximum performance, use direct column access:
+
+```cpp
+basis_rs::DataFrame df("trades.parquet");
+auto price_col = df.GetColumn<double>("price");
+
+// Range-for iteration (zero-copy)
+for (double price : price_col) {
+    process(price);
+}
+
+// Index-based access
+for (size_t i = 0; i < price_col.size(); ++i) {
+    process(price_col[i]);
+}
+```
 
 ### Writing
 
 ```cpp
-auto writer = file.SpawnWriter<Trade>();
+basis_rs::ParquetWriter<Trade> writer("output.parquet");
 writer.WriteRecord({1, "AAPL", 150.0});
 writer.WriteRecord({2, "GOOG", 2800.0});
-// writer.Finish() called automatically on destruction
+writer.Finish();  // or let destructor call it
 ```
 
 ## Benchmarking Parquet Read Performance
