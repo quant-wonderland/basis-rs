@@ -43,7 +43,7 @@ On a 637MB parquet file with 20M rows and 49 columns:
 | `include/basis_rs/parquet/detail/codec.hpp` | ParquetCodec for struct-column mapping |
 | `include/basis_rs/parquet/detail/query.hpp` | DataFrameBuilder implementation |
 | `include/basis_rs/parquet/detail/cell_codec.hpp` | ParquetCellCodec FFI type specializations |
-| `include/basis_rs/parquet/detail/type_traits.hpp` | ParquetTypeOf type traits |
+| `include/basis_rs/parquet/detail/type_traits.hpp` | ParquetTypeOf type traits, AbseilCivilTime concept |
 | `cpp/tests/parquet_test.cpp` | Unit tests |
 | `cpp/tests/parquet_benchmark.cpp` | Performance benchmark |
 
@@ -121,6 +121,7 @@ auto records = df.ReadAllAs<TickData>();
 struct TickData {
     int32_t stock_id;
     float close;
+    absl::CivilDay date;  // AbseilCivilTime types supported
 };
 
 template <>
@@ -129,6 +130,7 @@ inline const basis_rs::ParquetCodec<TickData>& basis_rs::GetParquetCodec() {
         basis_rs::ParquetCodec<TickData> c;
         c.Add("StockId", &TickData::stock_id);
         c.Add("Close", &TickData::close);
+        c.Add("Date", &TickData::date);
         return c;
     }();
     return codec;
@@ -136,9 +138,26 @@ inline const basis_rs::ParquetCodec<TickData>& basis_rs::GetParquetCodec() {
 
 // Write records
 basis_rs::ParquetWriter<TickData> writer("output.parquet");
-writer.WriteRecord({123, 45.6f});
+writer.WriteRecord({123, 45.6f, absl::CivilDay(2024, 1, 15)});
 writer.WriteRecords(records_vector);
 writer.Finish();  // Or let destructor auto-finish
+```
+
+### AbseilCivilTime Support
+
+The codec supports absl civil time types (`absl::CivilDay`, `absl::CivilSecond`, `absl::CivilMinute`, `absl::CivilHour`). These are stored as int64 milliseconds since epoch in Parquet, converted using Asia/Shanghai timezone.
+
+```cpp
+struct DateEntry {
+    int64_t id;
+    absl::CivilDay date;
+};
+
+// Reading: DateTime columns auto-convert to CivilDay
+auto entries = df.ReadAllAs<DateEntry>();
+
+// Writing: CivilDay auto-converts to DateTime (milliseconds)
+writer.WriteRecord({1, absl::CivilDay(2024, 6, 30)});
 ```
 
 ## Architecture
@@ -188,14 +207,35 @@ C++ DataFrame::Open(path).Select(...).Filter(...).Collect()
 | `double` | `f64` | `Float64` | Yes |
 | `std::string` | `String` | `String` | No (allocation) |
 | `bool` | `bool` | `Boolean` | No (bit-packed) |
-| DateTime | `i64` (ms) | `Datetime` | Yes |
+| `absl::CivilDay` | `i64` (ms) | `Datetime` | Yes (via int64) |
+| `absl::CivilSecond` | `i64` (ms) | `Datetime` | Yes (via int64) |
+| `absl::CivilMinute` | `i64` (ms) | `Datetime` | Yes (via int64) |
+| `absl::CivilHour` | `i64` (ms) | `Datetime` | Yes (via int64) |
 
 ## Adding a New Column Type
 
 1. Add `parquet_df_get_<type>_chunks()` in `cxx_bridge.rs`
 2. Add `DataFrame::GetColumn<Type>()` specialization in `parquet.hpp`
-3. Add `ParquetCellCodec<Type>` in `detail/cell_codec.hpp` for legacy API support
-4. Add tests
+3. Add `ParquetCellCodec<Type>` in `detail/cell_codec.hpp` (Read + Write methods)
+4. Add `ParquetTypeOf<Type>` specialization in `detail/type_traits.hpp`
+5. Update `ParquetCodec::Add()` in `detail/codec.hpp` for df_readers_ lambda
+6. Add tests
+
+For custom types like `AbseilCivilTime`, use C++ concepts:
+```cpp
+// type_traits.hpp
+template <typename T>
+concept AbseilCivilTime = std::same_as<T, absl::CivilDay> || ...;
+
+template <AbseilCivilTime T>
+struct ParquetTypeOf<T> {
+  static constexpr ffi::ColumnType type = ffi::ColumnType::DateTime;
+};
+
+// cell_codec.hpp
+template <AbseilCivilTime T>
+struct ParquetCellCodec<T> { /* Read/Write with conversion */ };
+```
 
 ## Testing
 
@@ -212,4 +252,5 @@ cargo test && cd build && ctest --output-on-failure
 - `polars 0.46` with `parquet` + `lazy` features
 - `cxx 1.0` / `cxx-build 1.0`
 - `thiserror 2.0`
+- `abseil-cpp` (absl::time for CivilDay/CivilSecond support)
 - GoogleTest (C++ tests)

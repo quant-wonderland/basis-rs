@@ -3,6 +3,7 @@
 // This header should be included from parquet.hpp after DataFrame is defined.
 // Do not include this header directly.
 
+#include <chrono>
 #include <cstddef>
 #include <functional>
 #include <stdexcept>
@@ -10,6 +11,7 @@
 #include <type_traits>
 #include <vector>
 
+#include "absl/time/time.h"
 #include "cell_codec.hpp"
 
 namespace basis_rs {
@@ -63,6 +65,24 @@ class ParquetCodec {
             // Actually we need bool getter - use the legacy path
             // For now, this path won't be hit in normal usage since
             // ParquetFile::ReadAll creates its own DataFrame
+          });
+    } else if constexpr (AbseilCivilTime<T>) {
+      // AbseilCivilTime columns use DateTime storage (int64 milliseconds)
+      df_readers_.push_back(
+          [name, accessor](const DataFrame& df,
+                           std::vector<RecordType>& records) {
+            auto chunks = ffi::parquet_df_get_datetime_chunks(df.Handle(), name);
+            constexpr absl::Time baseline{};
+            size_t row = 0;
+            for (const auto& chunk : chunks) {
+              const int64_t* ptr = reinterpret_cast<const int64_t*>(chunk.ptr);
+              for (size_t i = 0; i < chunk.len && row < records.size(); ++i) {
+                std::chrono::milliseconds time(ptr[i]);
+                absl::Time absl_time = baseline + absl::FromChrono(time);
+                records[row++].*accessor =
+                    T{absl::ToCivilSecond(absl_time, GetShanghaiTimeZone())};
+              }
+            }
           });
     } else {
       // Primitive types use zero-copy column access with seamless iteration

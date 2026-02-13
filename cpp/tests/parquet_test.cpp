@@ -1,7 +1,11 @@
 #include <basis_rs/parquet/parquet.hpp>
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <gtest/gtest.h>
+
+#include "absl/time/civil_time.h"
+#include "absl/time/time.h"
 
 namespace fs = std::filesystem;
 
@@ -33,6 +37,18 @@ struct PartialEntry
 {
   int64_t id;
   double score;
+};
+
+struct DateEntry
+{
+  int64_t id;
+  absl::CivilDay date;
+};
+
+struct TimestampEntry
+{
+  int64_t id;
+  absl::CivilSecond timestamp;
 };
 
 // ==================== Codec Registrations ====================
@@ -88,6 +104,32 @@ inline const basis_rs::ParquetCodec<PartialEntry> &basis_rs::GetParquetCodec()
     basis_rs::ParquetCodec<PartialEntry> c;
     c.Add("id", &PartialEntry::id);
     c.Add("score", &PartialEntry::score);
+    return c;
+  }();
+  return codec;
+}
+
+template <>
+inline const basis_rs::ParquetCodec<DateEntry> &basis_rs::GetParquetCodec()
+{
+  static basis_rs::ParquetCodec<DateEntry> codec = []()
+  {
+    basis_rs::ParquetCodec<DateEntry> c;
+    c.Add("id", &DateEntry::id);
+    c.Add("date", &DateEntry::date);
+    return c;
+  }();
+  return codec;
+}
+
+template <>
+inline const basis_rs::ParquetCodec<TimestampEntry> &basis_rs::GetParquetCodec()
+{
+  static basis_rs::ParquetCodec<TimestampEntry> codec = []()
+  {
+    basis_rs::ParquetCodec<TimestampEntry> c;
+    c.Add("id", &TimestampEntry::id);
+    c.Add("timestamp", &TimestampEntry::timestamp);
     return c;
   }();
   return codec;
@@ -663,4 +705,147 @@ TEST_F(ParquetTest, DataFrameNoFilter)
   EXPECT_EQ(records[0].id, 1);
   EXPECT_EQ(records[0].name, "alice");
   EXPECT_DOUBLE_EQ(records[0].score, 85.5);
+}
+
+// ==================== Absl Civil Time Tests ====================
+
+TEST_F(ParquetTest, AbslCivilDayReadWrite)
+{
+  auto path = temp_dir_ / "civil_day.parquet";
+
+  {
+    basis_rs::ParquetWriter<DateEntry> writer(path);
+    writer.WriteRecord({1, absl::CivilDay(2024, 1, 15)});
+    writer.WriteRecord({2, absl::CivilDay(2024, 6, 30)});
+    writer.WriteRecord({3, absl::CivilDay(2024, 12, 31)});
+    writer.Finish();
+  }
+
+  EXPECT_TRUE(fs::exists(path));
+
+  basis_rs::DataFrame df(path);
+  auto records = df.ReadAllAs<DateEntry>();
+
+  ASSERT_EQ(records.size(), 3);
+  EXPECT_EQ(records[0].id, 1);
+  EXPECT_EQ(records[0].date, absl::CivilDay(2024, 1, 15));
+  EXPECT_EQ(records[1].id, 2);
+  EXPECT_EQ(records[1].date, absl::CivilDay(2024, 6, 30));
+  EXPECT_EQ(records[2].id, 3);
+  EXPECT_EQ(records[2].date, absl::CivilDay(2024, 12, 31));
+}
+
+TEST_F(ParquetTest, AbslCivilSecondReadWrite)
+{
+  auto path = temp_dir_ / "civil_second.parquet";
+
+  {
+    basis_rs::ParquetWriter<TimestampEntry> writer(path);
+    writer.WriteRecord({1, absl::CivilSecond(2024, 1, 15, 10, 30, 45)});
+    writer.WriteRecord({2, absl::CivilSecond(2024, 6, 30, 23, 59, 59)});
+    writer.Finish();
+  }
+
+  EXPECT_TRUE(fs::exists(path));
+
+  basis_rs::DataFrame df(path);
+  auto records = df.ReadAllAs<TimestampEntry>();
+
+  ASSERT_EQ(records.size(), 2);
+  EXPECT_EQ(records[0].id, 1);
+  EXPECT_EQ(records[0].timestamp, absl::CivilSecond(2024, 1, 15, 10, 30, 45));
+  EXPECT_EQ(records[1].id, 2);
+  EXPECT_EQ(records[1].timestamp, absl::CivilSecond(2024, 6, 30, 23, 59, 59));
+}
+
+TEST_F(ParquetTest, GetDateTimeColumn)
+{
+  auto path = temp_dir_ / "datetime_col.parquet";
+
+  // Write test data with known timestamps
+  {
+    basis_rs::ParquetWriter<TimestampEntry> writer(path);
+    writer.WriteRecord({1, absl::CivilSecond(2024, 1, 15, 10, 30, 45)});
+    writer.WriteRecord({2, absl::CivilSecond(2024, 6, 30, 23, 59, 59)});
+    writer.WriteRecord({3, absl::CivilSecond(2024, 12, 31, 0, 0, 0)});
+    writer.Finish();
+  }
+
+  basis_rs::DataFrame df(path);
+
+  // Test GetDateTimeColumn returns milliseconds since epoch
+  auto ts_col = basis_rs::GetDateTimeColumn(df, "timestamp");
+
+  EXPECT_EQ(ts_col.size(), 3);
+  EXPECT_GE(ts_col.NumChunks(), 1);
+
+  // Verify we can iterate and values are reasonable (positive, after 2020)
+  constexpr int64_t jan_2020_ms = 1577836800000LL; // 2020-01-01 00:00:00 UTC
+  for (int64_t ms : ts_col)
+  {
+    EXPECT_GT(ms, jan_2020_ms);
+  }
+
+  // Test random access
+  int64_t first_ms = ts_col[0];
+  int64_t second_ms = ts_col[1];
+  EXPECT_NE(first_ms, second_ms);
+
+  // Convert back to CivilSecond and verify
+  constexpr absl::Time baseline{};
+  absl::Time t0 = baseline + absl::FromChrono(std::chrono::milliseconds(first_ms));
+  absl::CivilSecond cs0 = absl::ToCivilSecond(t0, absl::FixedTimeZone(8 * 3600));
+  EXPECT_EQ(cs0, absl::CivilSecond(2024, 1, 15, 10, 30, 45));
+}
+
+TEST_F(ParquetTest, GetDateTimeColumnIteration)
+{
+  auto path = temp_dir_ / "datetime_iter.parquet";
+
+  // Write multiple records
+  const int n = 100;
+  {
+    basis_rs::ParquetWriter<DateEntry> writer(path);
+    for (int i = 0; i < n; ++i)
+    {
+      writer.WriteRecord({i, absl::CivilDay(2024, 1, 1) + i});
+    }
+    writer.Finish();
+  }
+
+  basis_rs::DataFrame df(path);
+  auto date_col = basis_rs::GetDateTimeColumn(df, "date");
+
+  EXPECT_EQ(date_col.size(), n);
+
+  // Verify iteration works correctly
+  size_t count = 0;
+  int64_t prev_ms = 0;
+  for (int64_t ms : date_col)
+  {
+    if (count > 0)
+    {
+      // Each day should be ~86400000 ms apart
+      int64_t diff = ms - prev_ms;
+      EXPECT_NEAR(diff, 86400000, 1000); // Allow 1 second tolerance for DST
+    }
+    prev_ms = ms;
+    ++count;
+  }
+  EXPECT_EQ(count, n);
+
+  // Verify index-based access matches iteration
+  int64_t sum_iter = 0;
+  for (int64_t ms : date_col)
+  {
+    sum_iter += ms;
+  }
+
+  int64_t sum_index = 0;
+  for (size_t i = 0; i < date_col.size(); ++i)
+  {
+    sum_index += date_col[i];
+  }
+
+  EXPECT_EQ(sum_iter, sum_index);
 }
