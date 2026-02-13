@@ -62,6 +62,12 @@ if(NOT EXISTS "${CXX_BRIDGE_CC}")
 endif()
 
 # ============================================================
+# External dependencies (for absl time types)
+# ============================================================
+
+find_package(absl REQUIRED)
+
+# ============================================================
 # basis_rs_parquet library
 # ============================================================
 
@@ -96,6 +102,7 @@ endif()
 
 target_link_libraries(basis_rs_parquet
     PUBLIC basis_rs_rust ${RUST_SYSTEM_LIBS}
+    PUBLIC absl::time
 )
 
 add_library(basis_rs::parquet ALIAS basis_rs_parquet)

@@ -1,12 +1,24 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <string>
 #include <vector>
 
+#include "absl/time/time.h"
 #include "cxx_bridge.rs.h"
+#include "type_traits.hpp"
 
 namespace basis_rs {
+
+absl::TimeZone GetShanghaiTimeZone() {
+  static absl::TimeZone tz_gmt8 = []() {
+    absl::TimeZone tz_gmt8;
+    absl::LoadTimeZone("Asia/Shanghai", &tz_gmt8);
+    return tz_gmt8;
+  }();
+  return tz_gmt8;
+}
 
 /// Codec for reading/writing individual column types to Parquet via FFI.
 template <typename T>
@@ -125,6 +137,39 @@ struct ParquetCellCodec<bool> {
     rust::Slice<const bool> slice(reinterpret_cast<const bool*>(temp.data()),
                                   temp.size());
     ffi::parquet_writer_add_bool_column(writer, name, slice);
+  }
+};
+
+// Specialization: AbseilCivilTime types (absl::CivilDay, absl::CivilSecond, etc.)
+template <AbseilCivilTime T>
+struct ParquetCellCodec<T> {
+  static constexpr absl::Time baseline{};
+
+  static std::vector<T> Read(const ffi::ParquetReader& reader,
+                             const std::string& name) {
+    auto rust_vec = ffi::parquet_reader_get_i64_column(reader, name);
+    std::vector<T> result;
+    result.reserve(rust_vec.size());
+    for (int64_t ms : rust_vec) {
+      std::chrono::milliseconds time(ms);
+      absl::Time absl_time = baseline + absl::FromChrono(time);
+      result.push_back(
+          T{absl::ToCivilSecond(absl_time, GetShanghaiTimeZone())});
+    }
+    return result;
+  }
+
+  static void Write(ffi::ParquetWriter& writer, const std::string& name,
+                    const std::vector<T>& data) {
+    std::vector<int64_t> i64_data;
+    i64_data.reserve(data.size());
+    for (const auto& civil : data) {
+      auto absl_time = absl::FromCivil(civil, GetShanghaiTimeZone());
+      i64_data.push_back(
+          absl::ToChronoMilliseconds(absl_time - baseline).count());
+    }
+    rust::Slice<const int64_t> slice(i64_data.data(), i64_data.size());
+    ffi::parquet_writer_add_datetime_column(writer, name, slice);
   }
 };
 

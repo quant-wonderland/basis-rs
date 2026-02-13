@@ -96,6 +96,7 @@
             pkgs.cmake
             pkgs.gtest
             pkgs.gcc
+            pkgs.abseil-cpp
           ];
 
           env = [

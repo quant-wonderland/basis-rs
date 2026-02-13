@@ -186,6 +186,11 @@ mod ffi {
             name: &str,
             data: &[bool],
         ) -> Result<()>;
+        fn parquet_writer_add_datetime_column(
+            writer: &mut ParquetWriter,
+            name: &str,
+            data: &[i64],
+        ) -> Result<()>;
         fn parquet_writer_finish(writer: Box<ParquetWriter>) -> Result<()>;
 
         // Query builder functions (lazy evaluation with predicate/projection pushdown)
@@ -621,6 +626,21 @@ fn parquet_writer_add_bool_column(
     data: &[bool],
 ) -> Result<(), String> {
     let series = Series::new(name.into(), data);
+    writer.columns.insert(name.to_string(), series);
+    writer.column_order.push(name.to_string());
+    Ok(())
+}
+
+fn parquet_writer_add_datetime_column(
+    writer: &mut ParquetWriter,
+    name: &str,
+    data: &[i64],
+) -> Result<(), String> {
+    // Create a datetime series from milliseconds since epoch
+    let ca = Int64Chunked::from_slice(name.into(), data);
+    let series = ca
+        .into_datetime(TimeUnit::Milliseconds, None)
+        .into_series();
     writer.columns.insert(name.to_string(), series);
     writer.column_order.push(name.to_string());
     Ok(())
