@@ -49,7 +49,7 @@ cargo test && cd build && ctest --output-on-failure
 
 | Module | Rules file | Description |
 |--------|-----------|-------------|
-| parquet | `.claude/rules/parquet.md` | Parquet I/O with zero-copy column access (~20x speedup), struct-based ReadAllAs, query builder with predicate pushdown |
+| parquet | `.claude/rules/parquet.md` | Parquet I/O with zero-copy DataFrame API, filtering with predicate pushdown, struct-based ReadAllAs/WriteRecord |
 
 ## Adding a New Module
 

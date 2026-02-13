@@ -3,36 +3,40 @@
 /**
  * Type-safe C++ wrapper for basis-rs Parquet functionality.
  *
- * ## New Zero-Copy API (Recommended)
+ * ## DataFrame API
  *
- * The new API provides direct access to column data without copying:
+ * DataFrame provides zero-copy column access to Parquet data:
  *
+ *   // Simple open
  *   basis_rs::DataFrame df("data.parquet");
  *
- *   // Simple range-for loop (recommended)
+ *   // With column projection and filtering
+ *   auto df = basis_rs::DataFrame::Open("data.parquet")
+ *       .Select({"Close", "High", "Low"})
+ *       .Filter("Close", basis_rs::Gt, 10.0f)
+ *       .Collect();
+ *
+ *   // Zero-copy column iteration
  *   auto close_col = df.GetColumn<float>("Close");
  *   for (float value : close_col) {
  *       sum += value;
  *   }
  *
- *   // Index-based access
- *   for (size_t i = 0; i < close_col.size(); ++i) {
- *       process(close_col[i]);
- *   }
- *
- *   // Or use ReadAllAs<T> for convenience (copies data to structs)
+ *   // Or convert to structs
  *   auto records = df.ReadAllAs<TickData>();
  *
- * ## Legacy API
+ * ## ParquetWriter
  *
- * The original ParquetFile/ParquetCodec API is still available for
- * backward compatibility but is slower due to data copying.
+ * For writing struct records to Parquet files:
+ *
+ *   basis_rs::ParquetWriter<TickData> writer("output.parquet");
+ *   writer.WriteRecord({123, 45.6f});
+ *   writer.Finish();
  */
 
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -52,14 +56,15 @@ class ParquetCodec;
 template <typename RecordType>
 const ParquetCodec<RecordType>& GetParquetCodec();
 
-// Forward declare ParquetCellCodec (defined in detail/cell_codec.hpp)
 template <typename T>
 struct ParquetCellCodec;
+
+class DataFrameBuilder;
 
 /// Zero-copy DataFrame wrapper. Provides direct access to Parquet column data.
 class DataFrame {
  public:
-  /// Open a Parquet file
+  /// Open a Parquet file (reads all columns)
   explicit DataFrame(const std::filesystem::path& path)
       : df_(ffi::parquet_open(path.string())) {}
 
@@ -67,6 +72,9 @@ class DataFrame {
   DataFrame(const std::filesystem::path& path,
             const std::vector<std::string>& columns)
       : df_(OpenProjected(path, columns)) {}
+
+  /// Start building a DataFrame with Select/Filter options
+  static DataFrameBuilder Open(const std::filesystem::path& path);
 
   /// Move constructor
   DataFrame(DataFrame&&) = default;
@@ -118,6 +126,12 @@ class DataFrame {
   ffi::ParquetDataFrame& Handle() { return *df_; }
 
  private:
+  friend class DataFrameBuilder;
+
+  /// Private constructor from FFI handle (used by DataFrameBuilder)
+  explicit DataFrame(rust::Box<ffi::ParquetDataFrame> df)
+      : df_(std::move(df)) {}
+
   static rust::Box<ffi::ParquetDataFrame> OpenProjected(
       const std::filesystem::path& path,
       const std::vector<std::string>& columns) {
@@ -199,9 +213,6 @@ inline ColumnAccessor<int64_t> GetDateTimeColumn(const DataFrame& df,
   return accessor;
 }
 
-// Note: Bool columns cannot use zero-copy due to bit-packing in Arrow.
-// The bool specialization is handled specially in ParquetCodec::Add().
-
 }  // namespace basis_rs
 
 // Include remaining detail headers that depend on DataFrame
@@ -211,7 +222,59 @@ inline ColumnAccessor<int64_t> GetDateTimeColumn(const DataFrame& df,
 
 namespace basis_rs {
 
-// Implementation of DataFrame::ReadAllAs (needs ParquetCodec)
+// ==================== DataFrame method implementations ====================
+
+inline DataFrameBuilder DataFrame::Open(const std::filesystem::path& path) {
+  return DataFrameBuilder(path);
+}
+
+inline DataFrame DataFrameBuilder::Collect() const {
+  if (filter_entries_.empty()) {
+    // No filters - use simple open
+    if (select_names_.empty()) {
+      return DataFrame(ffi::parquet_open(path_.string()));
+    } else {
+      rust::Vec<rust::String> cols;
+      cols.reserve(select_names_.size());
+      for (const auto& c : select_names_) {
+        cols.push_back(rust::String(c));
+      }
+      return DataFrame(ffi::parquet_open_projected(path_.string(), std::move(cols)));
+    }
+  }
+
+  // Has filters - use query API
+  auto query = ffi::parquet_query_new(path_.string());
+
+  // Set projection only if user explicitly selected columns
+  if (!select_names_.empty()) {
+    // Include filter columns in projection to ensure filter works
+    std::vector<std::string> scan_columns = select_names_;
+    for (const auto& f : filter_entries_) {
+      if (std::find(scan_columns.begin(), scan_columns.end(), f.column) ==
+          scan_columns.end()) {
+        scan_columns.push_back(f.column);
+      }
+    }
+
+    rust::Vec<rust::String> cols;
+    cols.reserve(scan_columns.size());
+    for (const auto& name : scan_columns) {
+      cols.push_back(rust::String(name));
+    }
+    ffi::parquet_query_select(*query, std::move(cols));
+  }
+  // If no Select() was called, read all columns (no projection)
+
+  // Apply filters
+  for (const auto& f : filter_entries_) {
+    f.apply(*query);
+  }
+
+  // Collect into DataFrame
+  return DataFrame(ffi::parquet_query_collect_df(std::move(query)));
+}
+
 template <typename RecordType>
 std::vector<RecordType> DataFrame::ReadAllAs() const {
   const auto& codec = GetParquetCodec<RecordType>();
@@ -227,7 +290,7 @@ inline constexpr auto Le = ffi::FilterOp::Le;
 inline constexpr auto Gt = ffi::FilterOp::Gt;
 inline constexpr auto Ge = ffi::FilterOp::Ge;
 
-// ==================== Legacy ParquetWriter ====================
+// ==================== ParquetWriter ====================
 
 template <typename RecordType>
 class ParquetWriter {
@@ -288,50 +351,6 @@ class ParquetWriter {
   std::filesystem::path path_;
   std::vector<RecordType> buffer_;
   bool finalized_;
-};
-
-// ==================== Legacy ParquetFile ====================
-
-class ParquetFile {
- public:
-  explicit ParquetFile(std::filesystem::path path) : path_(std::move(path)) {}
-
-  /// Check if the file exists.
-  bool Exists() const { return std::filesystem::exists(path_); }
-
-  /// Get the file path.
-  const std::filesystem::path& path() const { return path_; }
-
-  /// Read all records using new zero-copy API (recommended).
-  template <typename RecordType>
-  std::vector<RecordType> ReadAll() const {
-    // Use legacy API for now since it's more robust and handles all types
-    const auto& codec = GetParquetCodec<RecordType>();
-    const auto& names = codec.column_names();
-    rust::Vec<rust::String> columns;
-    columns.reserve(names.size());
-    for (const auto& name : names) {
-      columns.push_back(rust::String(name));
-    }
-    auto reader =
-        ffi::parquet_reader_open_projected(path_.string(), std::move(columns));
-    return codec.ReadAll(*reader);
-  }
-
-  /// Start building a query for the given record type.
-  template <typename RecordType>
-  ParquetQuery<RecordType> Read() const {
-    return ParquetQuery<RecordType>(path_);
-  }
-
-  /// Spawn a writer for the given record type.
-  template <typename RecordType>
-  ParquetWriter<RecordType> SpawnWriter() const {
-    return ParquetWriter<RecordType>(path_);
-  }
-
- private:
-  std::filesystem::path path_;
 };
 
 }  // namespace basis_rs

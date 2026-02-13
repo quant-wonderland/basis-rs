@@ -11,10 +11,10 @@ paths:
 
 # Parquet Module
 
-Parquet file I/O using Polars, exposed to C++ via CXX bridge. The module provides two APIs:
+Parquet file I/O using Polars, exposed to C++ via CXX bridge. The module provides:
 
-1. **DataFrame API** (recommended): Zero-copy column access via `DataFrame` class (~20x faster)
-2. **Query Builder API**: Struct-based reads with filter/select via `ParquetFile` and `ParquetQuery`
+1. **DataFrame API**: Zero-copy column access with optional filtering and column selection
+2. **ParquetWriter API**: Struct-based writes to Parquet files
 
 ## Performance
 
@@ -27,7 +27,7 @@ On a 637MB parquet file with 20M rows and 49 columns:
 | Column iteration (sum) | 47ms | Iterate 20M floats |
 | Row iteration (chunk-wise) | 67ms | Process rows via chunks |
 | ReadAllAs<T> | 503ms | Convert to struct vector |
-| Query builder | ~1100ms | ParquetFile.Read().Collect() |
+| DataFrame with Filter | varies | Predicate pushdown to Parquet reader |
 
 **Speedup: ~20x** for column-oriented workloads via DataFrame zero-copy API.
 
@@ -38,13 +38,13 @@ On a 637MB parquet file with 20M rows and 49 columns:
 | `src/lib.rs` | Crate entry point: re-exports `ParquetError`, `ParquetReader`, `ParquetWriter` |
 | `src/parquet.rs` | Rust public API: builder pattern readers/writers |
 | `src/cxx_bridge.rs` | CXX FFI layer: `ParquetDataFrame` (zero-copy), `ParquetReader`, `ParquetQuery` |
-| `include/basis_rs/parquet/parquet.hpp` | Main C++ API header (user-facing: DataFrame, ParquetFile, ParquetWriter) |
+| `include/basis_rs/parquet/parquet.hpp` | Main C++ API header (DataFrame, DataFrameBuilder, ParquetWriter) |
 | `include/basis_rs/parquet/detail/column_accessor.hpp` | ColumnAccessor, ColumnIterator, ColumnChunkView |
 | `include/basis_rs/parquet/detail/codec.hpp` | ParquetCodec for struct-column mapping |
-| `include/basis_rs/parquet/detail/query.hpp` | ParquetQuery builder |
+| `include/basis_rs/parquet/detail/query.hpp` | DataFrameBuilder implementation |
 | `include/basis_rs/parquet/detail/cell_codec.hpp` | ParquetCellCodec FFI type specializations |
 | `include/basis_rs/parquet/detail/type_traits.hpp` | ParquetTypeOf type traits |
-| `cpp/tests/parquet_test.cpp` | Unit tests (27 test cases) |
+| `cpp/tests/parquet_test.cpp` | Unit tests |
 | `cpp/tests/parquet_benchmark.cpp` | Performance benchmark |
 
 ## DataFrame API (Zero-Copy)
@@ -52,8 +52,17 @@ On a 637MB parquet file with 20M rows and 49 columns:
 ```cpp
 #include <basis_rs/parquet/parquet.hpp>
 
-// Open file with column projection
+// Simple open (all columns)
+basis_rs::DataFrame df("data.parquet");
+
+// With column projection
 basis_rs::DataFrame df("data.parquet", {"StockId", "Close", "High", "Low"});
+
+// Builder pattern with filtering (predicate pushdown)
+auto df = basis_rs::DataFrame::Open("data.parquet")
+              .Select({"StockId", "Close", "High", "Low"})
+              .Filter("Close", basis_rs::Gt, 10.0f)
+              .Collect();
 
 // Zero-copy column access
 auto close = df.GetColumn<float>("Close");
@@ -87,7 +96,8 @@ auto records = df.ReadAllAs<TickData>();
 
 ### Key Classes
 
-- **`DataFrame`**: Owns the Rust DataFrame, provides `GetColumn<T>()` and `ReadAllAs<T>()`
+- **`DataFrame`**: Owns the Rust DataFrame, provides `GetColumn<T>()`, `ReadAllAs<T>()`, and static `Open()` builder
+- **`DataFrameBuilder`**: Builder for DataFrame with `Select()`, `Filter()`, and `Collect()` methods
 - **`ColumnAccessor<T>`**: Zero-copy access to column data with seamless cross-chunk iteration
   - `begin()/end()`: Forward iterator for range-for loops
   - `operator[]`: O(log n) random access via binary search
@@ -104,7 +114,7 @@ auto records = df.ReadAllAs<TickData>();
 - String columns still require allocation (use `GetStringColumn()`)
 - DateTime columns are stored as int64_t milliseconds (use `GetDateTimeColumn()`)
 
-## Query Builder API (Struct-based)
+## ParquetWriter API
 
 ```cpp
 // Define struct and codec
@@ -124,19 +134,11 @@ inline const basis_rs::ParquetCodec<TickData>& basis_rs::GetParquetCodec() {
     return codec;
 }
 
-// Read all records via query builder
-basis_rs::ParquetFile file("data.parquet");
-auto records = file.Read<TickData>().Collect();
-
-// Query with filter
-auto filtered = file.Read<TickData>()
-    .Filter(&TickData::close, basis_rs::Gt, 10.0f)
-    .Collect();
-
 // Write records
-auto writer = file.SpawnWriter<TickData>();
+basis_rs::ParquetWriter<TickData> writer("output.parquet");
 writer.WriteRecord({123, 45.6f});
-writer.Finish();
+writer.WriteRecords(records_vector);
+writer.Finish();  // Or let destructor auto-finish
 ```
 
 ## Architecture
@@ -145,11 +147,11 @@ writer.Finish();
 
 ```
 include/basis_rs/parquet/
-├── parquet.hpp              # Main public header (DataFrame, ParquetFile, ParquetWriter)
+├── parquet.hpp              # Main public header (DataFrame, DataFrameBuilder, ParquetWriter)
 └── detail/                  # Implementation details
     ├── column_accessor.hpp  # ColumnAccessor, ColumnIterator, ColumnChunkView
     ├── codec.hpp            # ParquetCodec
-    ├── query.hpp            # ParquetQuery
+    ├── query.hpp            # DataFrameBuilder
     ├── cell_codec.hpp       # ParquetCellCodec specializations
     └── type_traits.hpp      # ParquetTypeOf
 ```
@@ -157,7 +159,7 @@ include/basis_rs/parquet/
 ### Zero-Copy Data Flow
 ```
 C++ DataFrame
-  -> parquet_open_projected() FFI
+  -> parquet_open() or parquet_open_projected() FFI
     -> Rust Polars reads parquet
       -> Returns Box<ParquetDataFrame> (opaque, holds DataFrame)
         -> C++ GetColumn<T>() -> parquet_df_get_*_chunks() FFI
@@ -165,11 +167,14 @@ C++ DataFrame
             -> C++ iterates directly on Rust memory
 ```
 
-### Struct Conversion Flow
+### Filtered Query Flow
 ```
-C++ ReadAllAs<T>()
-  -> ParquetCodec<T>::ReadAllFromDf()
-    -> For each column: GetColumn<T>() -> iterate via range-for -> copy to struct fields
+C++ DataFrame::Open(path).Select(...).Filter(...).Collect()
+  -> DataFrameBuilder accumulates Select/Filter calls
+    -> Collect() builds ParquetQuery via FFI
+      -> parquet_query_new() -> parquet_query_select() -> parquet_query_filter_*()
+        -> parquet_query_collect_df() -> Polars lazy scan with pushdown
+          -> Returns DataFrame with filters applied
 ```
 
 ## Type Mapping
