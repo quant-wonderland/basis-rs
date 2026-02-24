@@ -122,6 +122,37 @@ writer.WriteRecord({2, "GOOG", 2800.0});
 writer.Finish();  // or let destructor call it
 ```
 
+## Performance
+
+Benchmarked on a 637MB Parquet file (20M rows, 49 columns, sorted by StockId ascending).
+
+### Read Performance
+
+| Operation | Time | Notes |
+|-----------|------|-------|
+| Open (4 columns projected) | 117ms | Projection pushdown |
+| Zero-copy column access | 0.006ms | Just pointer retrieval |
+| Column iteration (sum 20M floats) | 176ms | Range-for loop |
+| Row iteration (chunk-wise) | 69ms | Multi-column chunk access |
+| ReadAllAs\<T\> (4 columns) | 1203ms | Struct vector conversion |
+
+### Filter Performance
+
+C++ FFI overhead is ~1ms — filter performance equals pure Polars.
+
+| Filter | Time | Result Rows | Notes |
+|--------|------|-------------|-------|
+| StockId == 1 (sorted, head) | 67ms | 4.8K | Row group pruning skips most I/O |
+| StockId == 600519 (sorted, tail) | 97ms | 5K | More metadata to scan before pruning |
+| StockId > 600000 (sorted, ~45%) | 157ms | 9.3M | Partial row group skip |
+| Close > 100.0f (unsorted, ~1.5%) | 112ms | 0.3M | Row group stats less effective |
+| Close > 10.0f (unsorted, ~58%) | 184ms | 11.9M | Full scan, large result set |
+
+Key findings:
+- Sorted column eq filter is faster than reading without filter — row group min/max pruning skips I/O entirely
+- Unsorted columns still benefit from row group statistics, but less effectively
+- Performance is dominated by row groups read from disk and result set memory allocation
+
 ## Benchmarking Parquet Read Performance
 
 A built-in benchmark tool lets you measure read performance on real files.
