@@ -155,7 +155,7 @@ Key findings:
 
 ### Write Tuning: row_group_size Impact
 
-For sorted-column eq filter workloads (2M rows sorted by StockId, filter `StockId == 500`):
+Synthetic dataset: 2M rows, 4 columns, sorted by StockId (1..=1000, ~2000 rows each). Filter: `StockId == 500`. Note: absolute times are much smaller than the production benchmark above due to the smaller dataset (~1MB vs 637MB).
 
 | row_group_size | File Size | Read Time | Notes |
 |----------------|-----------|-----------|-------|

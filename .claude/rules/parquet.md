@@ -65,7 +65,7 @@ Data is stored sorted by StockId (ascending). Polars leverages row group min/max
 
 ### Write Tuning: row_group_size Impact on Filter Read
 
-Benchmarked on 2M rows sorted by StockId, filter `StockId == 500` (returns 2000 rows):
+Synthetic dataset: 2M rows, 4 columns (StockId int32, Close/High/Low float), sorted by StockId ascending (1..=1000, ~2000 rows each). Filter: `StockId == 500` (returns 2000 rows). Note: absolute times are much smaller than the production benchmark above due to the smaller dataset (~1MB vs 637MB).
 
 | row_group_size | File Size | Read Time | Notes |
 |----------------|-----------|-----------|-------|
