@@ -63,6 +63,24 @@ Data is stored sorted by StockId (ascending). Polars leverages row group min/max
 - Unsorted column with small selectivity (Close > 100.0f, 112ms) still benefits from row group min/max stats but less effectively than sorted columns
 - Performance is dominated by: (1) row groups read from disk, (2) result set memory allocation
 
+### Write Tuning: row_group_size Impact on Filter Read
+
+Benchmarked on 2M rows sorted by StockId, filter `StockId == 500` (returns 2000 rows):
+
+| row_group_size | File Size | Read Time | Notes |
+|----------------|-----------|-----------|-------|
+| 1K | 18MB | 28.6ms | Metadata bloat (17x), too many row groups to parse |
+| 10K | 6MB | 2.8ms | Good pruning, slight file overhead |
+| 100K | 1.3MB | 2.4ms | Good balance |
+| 500K | 1.1MB | 1.2ms | Optimal for this dataset |
+| 1M (default) | 1.1MB | 3.2ms | Fewer groups to skip |
+| 2M (single) | 1.1MB | 6.0ms | No pruning possible, full scan |
+
+- For sorted-column eq filter: row_group_size 10K-500K is the sweet spot
+- Too small (<1K): metadata overhead dominates (file bloat + parse cost)
+- Too large (single group): loses row group pruning entirely
+- Recommendation: `with_row_group_size(100_000)` to `with_row_group_size(500_000)` for sorted filter workloads
+
 ## Key Files
 
 | File | Role |

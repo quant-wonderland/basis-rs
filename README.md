@@ -153,6 +153,21 @@ Key findings:
 - Unsorted columns still benefit from row group statistics, but less effectively
 - Performance is dominated by row groups read from disk and result set memory allocation
 
+### Write Tuning: row_group_size Impact
+
+For sorted-column eq filter workloads (2M rows sorted by StockId, filter `StockId == 500`):
+
+| row_group_size | File Size | Read Time | Notes |
+|----------------|-----------|-----------|-------|
+| 1K | 18MB | 28.6ms | Metadata bloat, too many groups |
+| 10K | 6MB | 2.8ms | Good pruning |
+| 100K | 1.3MB | 2.4ms | Good balance |
+| 500K | 1.1MB | 1.2ms | Optimal |
+| 1M (default) | 1.1MB | 3.2ms | Fewer groups to skip |
+| 2M (single) | 1.1MB | 6.0ms | No pruning, full scan |
+
+Recommendation: use `with_row_group_size(100_000)` to `with_row_group_size(500_000)` for sorted filter workloads.
+
 ## Benchmarking Parquet Read Performance
 
 A built-in benchmark tool lets you measure read performance on real files.
