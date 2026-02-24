@@ -794,7 +794,7 @@ TEST_F(ParquetTest, GetDateTimeColumn)
   // Convert back to CivilSecond and verify
   constexpr absl::Time baseline{};
   absl::Time t0 = baseline + absl::FromChrono(std::chrono::milliseconds(first_ms));
-  absl::CivilSecond cs0 = absl::ToCivilSecond(t0, absl::FixedTimeZone(8 * 3600));
+  absl::CivilSecond cs0 = absl::ToCivilSecond(t0, basis_rs::GetShanghaiTimeZone());
   EXPECT_EQ(cs0, absl::CivilSecond(2024, 1, 15, 10, 30, 45));
 }
 

@@ -510,7 +510,7 @@ fn parquet_writer_add_datetime_column(
     // Create a datetime series from milliseconds since epoch
     let ca = Int64Chunked::from_slice(name.into(), data);
     let series = ca
-        .into_datetime(TimeUnit::Milliseconds, None)
+        .into_datetime(TimeUnit::Milliseconds, Some("Asia/Shanghai".into()))
         .into_series();
     writer.columns.insert(name.to_string(), series);
     writer.column_order.push(name.to_string());
