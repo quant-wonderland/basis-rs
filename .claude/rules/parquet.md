@@ -22,14 +22,64 @@ On a 637MB parquet file with 20M rows and 49 columns:
 
 | Operation | Time | Notes |
 |-----------|------|-------|
-| Open (4 columns projected) | 54ms | Projection pushdown |
-| Zero-copy column access | 0.003ms | Just pointer retrieval |
-| Column iteration (sum) | 47ms | Iterate 20M floats |
-| Row iteration (chunk-wise) | 67ms | Process rows via chunks |
-| ReadAllAs<T> | 503ms | Convert to struct vector |
-| DataFrame with Filter | varies | Predicate pushdown to Parquet reader |
+| Open (4 columns projected) | 113ms | Projection pushdown |
+| Zero-copy column access | 0.004ms | Just pointer retrieval |
+| Column iteration (sum) | 102ms | Iterate 20M floats (range-for, pointer-based iterator) |
+| Row iteration (chunk-wise) | 70ms | Process rows via chunks |
+| ReadAllAs<T> | 689ms | Convert to struct vector (chunk-wise access) |
+| Filter query (Select+Filter+Collect) | 158ms | Predicate pushdown via Polars lazy scan |
 
 **Speedup: ~20x** for column-oriented workloads via DataFrame zero-copy API.
+
+### Filter Query (DataFrameBuilder / query.hpp)
+
+`DataFrameBuilder` is a thin C++ builder that dispatches to Rust FFI → Polars `LazyFrame::scan_parquet` with predicate/projection pushdown. Pure Rust benchmark confirms zero FFI overhead:
+
+| Path | Time | Rows |
+|------|------|------|
+| Pure Rust: eager read (projected) | 111ms | 20M |
+| Pure Rust: lazy scan (select+filter) | 165ms | 12M |
+| C++ FFI: DataFrameBuilder (select+filter) | 166ms | 12M |
+
+- FFI overhead: ~1ms (negligible) — C++ query performance equals pure Polars
+- The ~54ms filter cost is Polars evaluating `Close > 10.0f` across 20M rows during I/O
+- Polars optimizer auto-reorders select/filter, so call order doesn't matter
+
+### Sorted Column vs Unsorted Column Filter
+
+Data is stored sorted by StockId (ascending). Polars leverages row group min/max statistics to skip irrelevant row groups:
+
+| Filter | Time | Rows | Notes |
+|--------|------|------|-------|
+| No filter (eager projected) | 116ms | 20M | Baseline |
+| StockId == 1 (sorted, head) | 67ms | 4.8K | Row group pruning skips most I/O |
+| StockId == 600519 (sorted, tail) | 97ms | 5K | Scans more metadata before pruning |
+| StockId > 600000 (sorted, ~45%) | 157ms | 9.3M | Partial row group skip |
+| Close > 100.0f (unsorted, ~1.5%) | 112ms | 0.3M | Row group stats less effective |
+| Close > 10.0f (unsorted, ~58%) | 184ms | 11.9M | Full scan, large result set |
+
+- Sorted column eq filter (67-97ms) is faster than no-filter baseline (116ms) — row group pruning skips I/O entirely
+- Head vs tail ~30ms gap: sequential file read + more metadata to scan before reaching tail row groups
+- Unsorted column with small selectivity (Close > 100.0f, 112ms) still benefits from row group min/max stats but less effectively than sorted columns
+- Performance is dominated by: (1) row groups read from disk, (2) result set memory allocation
+
+### Write Tuning: row_group_size Impact on Filter Read
+
+Synthetic dataset: 2M rows, 4 columns (StockId int32, Close/High/Low float), sorted by StockId ascending (1..=1000, ~2000 rows each). Filter: `StockId == 500` (returns 2000 rows). Note: absolute times are much smaller than the production benchmark above due to the smaller dataset (~1MB vs 637MB).
+
+| row_group_size | File Size | Read Time | Notes |
+|----------------|-----------|-----------|-------|
+| 1K | 18MB | 28.6ms | Metadata bloat (17x), too many row groups to parse |
+| 10K | 6MB | 2.8ms | Good pruning, slight file overhead |
+| 100K | 1.3MB | 2.4ms | Good balance |
+| 500K | 1.1MB | 1.2ms | Optimal for this dataset |
+| 1M (default) | 1.1MB | 3.2ms | Fewer groups to skip |
+| 2M (single) | 1.1MB | 6.0ms | No pruning possible, full scan |
+
+- For sorted-column eq filter: row_group_size 10K-500K is the sweet spot
+- Too small (<1K): metadata overhead dominates (file bloat + parse cost)
+- Too large (single group): loses row group pruning entirely
+- Recommendation: `with_row_group_size(100_000)` to `with_row_group_size(500_000)` for sorted filter workloads
 
 ## Key Files
 
