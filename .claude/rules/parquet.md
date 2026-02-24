@@ -24,7 +24,7 @@ On a 637MB parquet file with 20M rows and 49 columns:
 |-----------|------|-------|
 | Open (4 columns projected) | 54ms | Projection pushdown |
 | Zero-copy column access | 0.003ms | Just pointer retrieval |
-| Column iteration (sum) | 47ms | Iterate 20M floats |
+| Column iteration (sum) | 102ms | Iterate 20M floats (range-for, pointer-based iterator) |
 | Row iteration (chunk-wise) | 67ms | Process rows via chunks |
 | ReadAllAs<T> | 704ms | Convert to struct vector (chunk-wise access) |
 | Filter query (Select+Filter+Collect) | 166ms | Predicate pushdown via Polars lazy scan, only ~48ms over projected open |

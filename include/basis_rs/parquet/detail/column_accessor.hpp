@@ -30,6 +30,8 @@ class ColumnChunkView {
 };
 
 /// Forward iterator that seamlessly traverses across multiple chunks.
+/// Uses raw pointers internally — operator++ is a single pointer increment
+/// in the common case; chunk boundary crossing is rare (once per row group).
 template <typename T>
 class ColumnIterator {
  public:
@@ -41,22 +43,32 @@ class ColumnIterator {
 
   ColumnIterator() = default;
 
-  ColumnIterator(const std::vector<ColumnChunkView<T>>* chunks, size_t chunk_idx,
-                 size_t elem_idx)
-      : chunks_(chunks), chunk_idx_(chunk_idx), elem_idx_(elem_idx) {
-    SkipEmptyChunks();
+  /// Construct a begin iterator
+  ColumnIterator(const std::vector<ColumnChunkView<T>>* chunks, size_t chunk_idx)
+      : chunks_(chunks), chunk_idx_(chunk_idx) {
+    if (chunk_idx_ < chunks_->size()) {
+      AdvanceToNonEmpty();
+    }
   }
 
-  reference operator*() const { return (*chunks_)[chunk_idx_][elem_idx_]; }
+  /// Construct an end sentinel
+  static ColumnIterator End(const std::vector<ColumnChunkView<T>>* chunks) {
+    ColumnIterator it;
+    it.chunks_ = chunks;
+    it.chunk_idx_ = chunks->size();
+    it.ptr_ = nullptr;
+    it.chunk_end_ = nullptr;
+    return it;
+  }
 
-  pointer operator->() const { return &(*chunks_)[chunk_idx_][elem_idx_]; }
+  reference operator*() const { return *ptr_; }
+  pointer operator->() const { return ptr_; }
 
   ColumnIterator& operator++() {
-    ++elem_idx_;
-    if (elem_idx_ >= (*chunks_)[chunk_idx_].size()) {
+    ++ptr_;
+    if (ptr_ == chunk_end_) {
       ++chunk_idx_;
-      elem_idx_ = 0;
-      SkipEmptyChunks();
+      AdvanceToNonEmpty();
     }
     return *this;
   }
@@ -68,7 +80,7 @@ class ColumnIterator {
   }
 
   bool operator==(const ColumnIterator& other) const {
-    return chunk_idx_ == other.chunk_idx_ && elem_idx_ == other.elem_idx_;
+    return chunk_idx_ == other.chunk_idx_ && ptr_ == other.ptr_;
   }
 
   bool operator!=(const ColumnIterator& other) const {
@@ -76,16 +88,24 @@ class ColumnIterator {
   }
 
  private:
-  void SkipEmptyChunks() {
-    while (chunk_idx_ < chunks_->size() &&
-           (*chunks_)[chunk_idx_].size() == 0) {
+  void AdvanceToNonEmpty() {
+    while (chunk_idx_ < chunks_->size()) {
+      const auto& c = (*chunks_)[chunk_idx_];
+      if (c.size() > 0) {
+        ptr_ = c.data();
+        chunk_end_ = c.data() + c.size();
+        return;
+      }
       ++chunk_idx_;
     }
+    ptr_ = nullptr;
+    chunk_end_ = nullptr;
   }
 
   const std::vector<ColumnChunkView<T>>* chunks_ = nullptr;
   size_t chunk_idx_ = 0;
-  size_t elem_idx_ = 0;
+  const T* ptr_ = nullptr;
+  const T* chunk_end_ = nullptr;
 };
 
 /// A column accessor that provides zero-copy access to column data.
@@ -144,10 +164,10 @@ class ColumnAccessor {
   }
 
   /// Iterator to beginning - enables range-for loops
-  iterator begin() const { return iterator(&chunks_, 0, 0); }
+  iterator begin() const { return iterator(&chunks_, 0); }
 
   /// Iterator to end
-  iterator end() const { return iterator(&chunks_, chunks_.size(), 0); }
+  iterator end() const { return iterator::End(&chunks_); }
 
   // ==================== Advanced API ====================
 
