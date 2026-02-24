@@ -45,6 +45,24 @@ On a 637MB parquet file with 20M rows and 49 columns:
 - The ~54ms filter cost is Polars evaluating `Close > 10.0f` across 20M rows during I/O
 - Polars optimizer auto-reorders select/filter, so call order doesn't matter
 
+### Sorted Column vs Unsorted Column Filter
+
+Data is stored sorted by StockId (ascending). Polars leverages row group min/max statistics to skip irrelevant row groups:
+
+| Filter | Time | Rows | Notes |
+|--------|------|------|-------|
+| No filter (eager projected) | 116ms | 20M | Baseline |
+| StockId == 1 (sorted, head) | 67ms | 4.8K | Row group pruning skips most I/O |
+| StockId == 600519 (sorted, tail) | 97ms | 5K | Scans more metadata before pruning |
+| StockId > 600000 (sorted, ~45%) | 157ms | 9.3M | Partial row group skip |
+| Close > 100.0f (unsorted, ~1.5%) | 112ms | 0.3M | Row group stats less effective |
+| Close > 10.0f (unsorted, ~58%) | 184ms | 11.9M | Full scan, large result set |
+
+- Sorted column eq filter (67-97ms) is faster than no-filter baseline (116ms) — row group pruning skips I/O entirely
+- Head vs tail ~30ms gap: sequential file read + more metadata to scan before reaching tail row groups
+- Unsorted column with small selectivity (Close > 100.0f, 112ms) still benefits from row group min/max stats but less effectively than sorted columns
+- Performance is dominated by: (1) row groups read from disk, (2) result set memory allocation
+
 ## Key Files
 
 | File | Role |
