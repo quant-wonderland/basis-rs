@@ -130,11 +130,11 @@ Benchmarked on a 637MB Parquet file (20M rows, 49 columns, sorted by StockId asc
 
 | Operation | Time | Notes |
 |-----------|------|-------|
-| Open (4 columns projected) | 117ms | Projection pushdown |
-| Zero-copy column access | 0.006ms | Just pointer retrieval |
+| Open (4 columns projected) | 113ms | Projection pushdown |
+| Zero-copy column access | 0.004ms | Just pointer retrieval |
 | Column iteration (sum 20M floats) | 102ms | Range-for loop |
-| Row iteration (chunk-wise) | 69ms | Multi-column chunk access |
-| ReadAllAs\<T\> (4 columns) | 704ms | Struct vector conversion (chunk-wise access) |
+| Row iteration (chunk-wise) | 70ms | Multi-column chunk access |
+| ReadAllAs\<T\> (4 columns) | 689ms | Struct vector conversion (chunk-wise access) |
 
 ### Filter Performance
 
