@@ -26,7 +26,7 @@ On a 637MB parquet file with 20M rows and 49 columns:
 | Zero-copy column access | 0.003ms | Just pointer retrieval |
 | Column iteration (sum) | 47ms | Iterate 20M floats |
 | Row iteration (chunk-wise) | 67ms | Process rows via chunks |
-| ReadAllAs<T> | 503ms | Convert to struct vector |
+| ReadAllAs<T> | 704ms | Convert to struct vector (chunk-wise access) |
 | Filter query (Select+Filter+Collect) | 166ms | Predicate pushdown via Polars lazy scan, only ~48ms over projected open |
 
 **Speedup: ~20x** for column-oriented workloads via DataFrame zero-copy API.
