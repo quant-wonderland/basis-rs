@@ -27,9 +27,23 @@ On a 637MB parquet file with 20M rows and 49 columns:
 | Column iteration (sum) | 47ms | Iterate 20M floats |
 | Row iteration (chunk-wise) | 67ms | Process rows via chunks |
 | ReadAllAs<T> | 503ms | Convert to struct vector |
-| DataFrame with Filter | varies | Predicate pushdown to Parquet reader |
+| Filter query (Select+Filter+Collect) | 166ms | Predicate pushdown via Polars lazy scan, only ~48ms over projected open |
 
 **Speedup: ~20x** for column-oriented workloads via DataFrame zero-copy API.
+
+### Filter Query (DataFrameBuilder / query.hpp)
+
+`DataFrameBuilder` is a thin C++ builder that dispatches to Rust FFI → Polars `LazyFrame::scan_parquet` with predicate/projection pushdown. Pure Rust benchmark confirms zero FFI overhead:
+
+| Path | Time | Rows |
+|------|------|------|
+| Pure Rust: eager read (projected) | 111ms | 20M |
+| Pure Rust: lazy scan (select+filter) | 165ms | 12M |
+| C++ FFI: DataFrameBuilder (select+filter) | 166ms | 12M |
+
+- FFI overhead: ~1ms (negligible) — C++ query performance equals pure Polars
+- The ~54ms filter cost is Polars evaluating `Close > 10.0f` across 20M rows during I/O
+- Polars optimizer auto-reorders select/filter, so call order doesn't matter
 
 ## Key Files
 
