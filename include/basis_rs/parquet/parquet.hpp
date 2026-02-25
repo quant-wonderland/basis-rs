@@ -300,61 +300,94 @@ template <typename RecordType>
 class ParquetWriter {
  public:
   explicit ParquetWriter(std::filesystem::path path)
-      : path_(std::move(path)), finalized_(false) {}
+      : path_(std::move(path)) {}
 
   ParquetWriter(ParquetWriter&& other) noexcept
       : path_(std::move(other.path_)),
         buffer_(std::move(other.buffer_)),
+        compression_(std::move(other.compression_)),
+        row_group_size_(other.row_group_size_),
+        writer_(std::move(other.writer_)),
         finalized_(other.finalized_) {
-    other.finalized_ = true;  // Prevent double-finish
+    other.finalized_ = true;
   }
 
   ~ParquetWriter() {
-    if (!finalized_ && !buffer_.empty()) {
+    if (!finalized_ && (!buffer_.empty() || writer_)) {
       try {
         Finish();
       } catch (...) {
-        // Ignore exceptions in destructor
       }
     }
   }
 
-  /// Write a single record (buffered).
-  void WriteRecord(const RecordType& record) { buffer_.push_back(record); }
+  /// Set compression algorithm ("zstd", "snappy", "uncompressed", "lz4", "gzip").
+  ParquetWriter& WithCompression(std::string compression) {
+    compression_ = std::move(compression);
+    return *this;
+  }
 
-  /// Write multiple records at once.
+  /// Set row group size. When > 0, enables streaming: auto-flushes when buffer reaches this size.
+  ParquetWriter& WithRowGroupSize(size_t size) {
+    row_group_size_ = size;
+    return *this;
+  }
+
+  void WriteRecord(const RecordType& record) {
+    buffer_.push_back(record);
+    MaybeFlush();
+  }
+
   void WriteRecords(const std::vector<RecordType>& records) {
     buffer_.insert(buffer_.end(), records.begin(), records.end());
+    MaybeFlush();
   }
 
-  /// Finish writing and flush to file.
   void Finish() {
-    if (finalized_) {
-      return;
-    }
-
-    if (!buffer_.empty()) {
-      auto writer = ffi::parquet_writer_new(path_.string());
-      GetParquetCodec<RecordType>().WriteAll(*writer, buffer_);
-      ffi::parquet_writer_finish(std::move(writer));
-    }
-
+    if (finalized_) return;
+    if (!buffer_.empty()) FlushBatch();
+    if (writer_) ffi::parquet_writer_finish(std::move(*writer_));
+    writer_.reset();
     finalized_ = true;
   }
 
-  /// Discard all buffered data without writing.
   void Discard() {
     buffer_.clear();
+    writer_.reset();
     finalized_ = true;
   }
 
-  /// Get number of buffered records.
   size_t BufferSize() const { return buffer_.size(); }
 
  private:
+  void MaybeFlush() {
+    if (row_group_size_ > 0 && buffer_.size() >= row_group_size_) {
+      FlushBatch();
+    }
+  }
+
+  void FlushBatch() {
+    if (buffer_.empty()) return;
+    EnsureWriter();
+    GetParquetCodec<RecordType>().WriteAll(**writer_, buffer_);
+    ffi::parquet_writer_write_batch(**writer_);
+    buffer_.clear();
+  }
+
+  void EnsureWriter() {
+    if (!writer_) {
+      writer_ = std::make_unique<rust::Box<ffi::ParquetWriter>>(
+          ffi::parquet_writer_new(path_.string(), compression_,
+                                  row_group_size_));
+    }
+  }
+
   std::filesystem::path path_;
   std::vector<RecordType> buffer_;
-  bool finalized_;
+  std::string compression_ = "zstd";
+  size_t row_group_size_ = 0;
+  std::unique_ptr<rust::Box<ffi::ParquetWriter>> writer_;
+  bool finalized_ = false;
 };
 
 }  // namespace basis_rs
