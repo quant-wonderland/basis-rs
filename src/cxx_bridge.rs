@@ -13,6 +13,7 @@
 
 use crate::parquet::ParquetReader as PolarsReader;
 use polars::prelude::*;
+use polars_arrow::ffi::mmap::slice_and_owner;
 use polars::io::parquet::write::BatchedWriter;
 use std::io::BufWriter;
 
@@ -179,6 +180,33 @@ mod ffi {
         ) -> Result<()>;
         fn parquet_writer_write_batch(writer: &mut ParquetWriter) -> Result<()>;
         fn parquet_writer_finish(writer: Box<ParquetWriter>) -> Result<()>;
+
+        // Zero-copy column add — data must remain valid until write_batch()
+        fn parquet_writer_add_i64_column_zerocopy(
+            writer: &mut ParquetWriter,
+            name: &str,
+            data: &[i64],
+        ) -> Result<()>;
+        fn parquet_writer_add_i32_column_zerocopy(
+            writer: &mut ParquetWriter,
+            name: &str,
+            data: &[i32],
+        ) -> Result<()>;
+        fn parquet_writer_add_f64_column_zerocopy(
+            writer: &mut ParquetWriter,
+            name: &str,
+            data: &[f64],
+        ) -> Result<()>;
+        fn parquet_writer_add_f32_column_zerocopy(
+            writer: &mut ParquetWriter,
+            name: &str,
+            data: &[f32],
+        ) -> Result<()>;
+        fn parquet_writer_add_datetime_column_zerocopy(
+            writer: &mut ParquetWriter,
+            name: &str,
+            data: &[i64],
+        ) -> Result<()>;
 
         // Query builder functions (lazy evaluation with predicate/projection pushdown)
         fn parquet_query_new(path: &str) -> Result<Box<ParquetQuery>>;
@@ -525,6 +553,67 @@ fn parquet_writer_add_datetime_column(
     data: &[i64],
 ) -> Result<(), String> {
     let ca = Int64Chunked::from_slice(name.into(), data);
+    let series = ca
+        .into_datetime(TimeUnit::Milliseconds, Some("Asia/Shanghai".into()))
+        .into_series();
+    parquet_writer_add_column(writer, series);
+    Ok(())
+}
+
+// Zero-copy column add functions — caller must keep data alive until write_batch()
+// Uses polars_arrow::ffi::mmap::slice_and_owner to wrap external memory without memcpy.
+
+fn parquet_writer_add_i64_column_zerocopy(
+    writer: &mut ParquetWriter,
+    name: &str,
+    data: &[i64],
+) -> Result<(), String> {
+    let arr = unsafe { slice_and_owner(data, ()) };
+    let ca = Int64Chunked::with_chunk(name.into(), arr);
+    writer.columns.push(ca.into_series().into());
+    Ok(())
+}
+
+fn parquet_writer_add_i32_column_zerocopy(
+    writer: &mut ParquetWriter,
+    name: &str,
+    data: &[i32],
+) -> Result<(), String> {
+    let arr = unsafe { slice_and_owner(data, ()) };
+    let ca = Int32Chunked::with_chunk(name.into(), arr);
+    writer.columns.push(ca.into_series().into());
+    Ok(())
+}
+
+fn parquet_writer_add_f64_column_zerocopy(
+    writer: &mut ParquetWriter,
+    name: &str,
+    data: &[f64],
+) -> Result<(), String> {
+    let arr = unsafe { slice_and_owner(data, ()) };
+    let ca = Float64Chunked::with_chunk(name.into(), arr);
+    writer.columns.push(ca.into_series().into());
+    Ok(())
+}
+
+fn parquet_writer_add_f32_column_zerocopy(
+    writer: &mut ParquetWriter,
+    name: &str,
+    data: &[f32],
+) -> Result<(), String> {
+    let arr = unsafe { slice_and_owner(data, ()) };
+    let ca = Float32Chunked::with_chunk(name.into(), arr);
+    writer.columns.push(ca.into_series().into());
+    Ok(())
+}
+
+fn parquet_writer_add_datetime_column_zerocopy(
+    writer: &mut ParquetWriter,
+    name: &str,
+    data: &[i64],
+) -> Result<(), String> {
+    let arr = unsafe { slice_and_owner(data, ()) };
+    let ca = Int64Chunked::with_chunk(name.into(), arr);
     let series = ca
         .into_datetime(TimeUnit::Milliseconds, Some("Asia/Shanghai".into()))
         .into_series();

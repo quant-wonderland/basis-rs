@@ -278,6 +278,33 @@ int main() {
     basis_rs::ffi::parquet_writer_finish(std::move(w));
   });
 
+  // ==================== ColumnarParquetWriter Benchmark ====================
+  std::cout << std::endl << "--- ColumnarParquetWriter ---" << std::endl;
+
+  double columnar_streaming_time =
+      benchmark("ColumnarWriter (streaming 500K, zstd)", [&]() {
+        basis_rs::ColumnarParquetWriter writer(write_path);
+        writer.WithCompression("zstd").WithRowGroupSize(500000);
+        writer.AddColumn("StockId", pre_col0.data(), pre_col0.size());
+        writer.AddColumn("Close", pre_col1.data(), pre_col1.size());
+        writer.AddColumn("High", pre_col2.data(), pre_col2.size());
+        writer.AddColumn("Low", pre_col3.data(), pre_col3.size());
+        writer.WriteBatch();
+        writer.Finish();
+      });
+
+  double columnar_snappy_time =
+      benchmark("ColumnarWriter (streaming 500K, snappy)", [&]() {
+        basis_rs::ColumnarParquetWriter writer(write_path);
+        writer.WithCompression("snappy").WithRowGroupSize(500000);
+        writer.AddColumn("StockId", pre_col0.data(), pre_col0.size());
+        writer.AddColumn("Close", pre_col1.data(), pre_col1.size());
+        writer.AddColumn("High", pre_col2.data(), pre_col2.size());
+        writer.AddColumn("Low", pre_col3.data(), pre_col3.size());
+        writer.WriteBatch();
+        writer.Finish();
+      });
+
   std::cout << std::endl << "=== Write Summary ===" << std::endl;
   double rows_m = write_data.size() / 1e6;
   std::cout << "Default (zstd):       " << write_default_time << " ms ("
@@ -288,6 +315,11 @@ int main() {
             << rows_m / (write_snappy_time / 1000.0) << " M rows/s)" << std::endl;
   std::cout << "Streaming (uncomp):   " << write_uncomp_time << " ms ("
             << rows_m / (write_uncomp_time / 1000.0) << " M rows/s)" << std::endl;
+  std::cout << std::endl << "--- ColumnarWriter ---" << std::endl;
+  std::cout << "Columnar (zstd):      " << columnar_streaming_time << " ms ("
+            << rows_m / (columnar_streaming_time / 1000.0) << " M rows/s)" << std::endl;
+  std::cout << "Columnar (snappy):    " << columnar_snappy_time << " ms ("
+            << rows_m / (columnar_snappy_time / 1000.0) << " M rows/s)" << std::endl;
 
   // Cleanup
   std::filesystem::remove_all(tmp_dir);
