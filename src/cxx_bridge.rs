@@ -11,9 +11,10 @@
 //! 3. Optional rechunk for single contiguous slice per column
 //! 4. ReadAllAs<T> done entirely in C++ using column slices
 
-use crate::parquet::{ParquetReader as PolarsReader, ParquetWriter as PolarsWriter};
+use crate::parquet::ParquetReader as PolarsReader;
 use polars::prelude::*;
-use std::collections::HashMap;
+use polars::io::parquet::write::BatchedWriter;
+use std::io::BufWriter;
 
 #[cxx::bridge(namespace = "basis_rs::ffi")]
 mod ffi {
@@ -136,7 +137,11 @@ mod ffi {
         type ParquetWriter;
         type ParquetQuery;
 
-        fn parquet_writer_new(path: &str) -> Result<Box<ParquetWriter>>;
+        fn parquet_writer_new(
+            path: &str,
+            compression: &str,
+            row_group_size: usize,
+        ) -> Result<Box<ParquetWriter>>;
         fn parquet_writer_add_i64_column(
             writer: &mut ParquetWriter,
             name: &str,
@@ -172,6 +177,7 @@ mod ffi {
             name: &str,
             data: &[i64],
         ) -> Result<()>;
+        fn parquet_writer_write_batch(writer: &mut ParquetWriter) -> Result<()>;
         fn parquet_writer_finish(writer: Box<ParquetWriter>) -> Result<()>;
 
         // Query builder functions (lazy evaluation with predicate/projection pushdown)
@@ -421,19 +427,42 @@ fn parquet_df_get_bool_column(
 
 // ==================== Writer Implementation ====================
 
-/// Wrapper for building and writing a Parquet file.
+/// Wrapper for building and writing a Parquet file with streaming support.
 pub struct ParquetWriter {
     path: String,
-    columns: HashMap<String, Series>,
-    column_order: Vec<String>,
+    columns: Vec<Column>,
+    compression: ParquetCompression,
+    row_group_size: usize, // 0 = default
+    batched: Option<BatchedWriter<BufWriter<std::fs::File>>>,
 }
 
-fn parquet_writer_new(path: &str) -> Result<Box<ParquetWriter>, String> {
+fn parse_compression(s: &str) -> Result<ParquetCompression, String> {
+    match s {
+        "zstd" | "" => Ok(ParquetCompression::Zstd(None)),
+        "snappy" => Ok(ParquetCompression::Snappy),
+        "uncompressed" => Ok(ParquetCompression::Uncompressed),
+        "lz4" => Ok(ParquetCompression::Lz4Raw),
+        "gzip" => Ok(ParquetCompression::Gzip(None)),
+        _ => Err(format!("Unknown compression: {}", s)),
+    }
+}
+
+fn parquet_writer_new(
+    path: &str,
+    compression: &str,
+    row_group_size: usize,
+) -> Result<Box<ParquetWriter>, String> {
     Ok(Box::new(ParquetWriter {
         path: path.to_string(),
-        columns: HashMap::new(),
-        column_order: Vec::new(),
+        columns: Vec::new(),
+        compression: parse_compression(compression)?,
+        row_group_size,
+        batched: None,
     }))
+}
+
+fn parquet_writer_add_column(writer: &mut ParquetWriter, series: Series) {
+    writer.columns.push(series.into());
 }
 
 fn parquet_writer_add_i64_column(
@@ -441,9 +470,7 @@ fn parquet_writer_add_i64_column(
     name: &str,
     data: &[i64],
 ) -> Result<(), String> {
-    let series = Series::new(name.into(), data);
-    writer.columns.insert(name.to_string(), series);
-    writer.column_order.push(name.to_string());
+    parquet_writer_add_column(writer, Series::new(name.into(), data));
     Ok(())
 }
 
@@ -452,9 +479,7 @@ fn parquet_writer_add_i32_column(
     name: &str,
     data: &[i32],
 ) -> Result<(), String> {
-    let series = Series::new(name.into(), data);
-    writer.columns.insert(name.to_string(), series);
-    writer.column_order.push(name.to_string());
+    parquet_writer_add_column(writer, Series::new(name.into(), data));
     Ok(())
 }
 
@@ -463,9 +488,7 @@ fn parquet_writer_add_f64_column(
     name: &str,
     data: &[f64],
 ) -> Result<(), String> {
-    let series = Series::new(name.into(), data);
-    writer.columns.insert(name.to_string(), series);
-    writer.column_order.push(name.to_string());
+    parquet_writer_add_column(writer, Series::new(name.into(), data));
     Ok(())
 }
 
@@ -474,9 +497,7 @@ fn parquet_writer_add_f32_column(
     name: &str,
     data: &[f32],
 ) -> Result<(), String> {
-    let series = Series::new(name.into(), data);
-    writer.columns.insert(name.to_string(), series);
-    writer.column_order.push(name.to_string());
+    parquet_writer_add_column(writer, Series::new(name.into(), data));
     Ok(())
 }
 
@@ -485,9 +506,7 @@ fn parquet_writer_add_string_column(
     name: &str,
     data: Vec<String>,
 ) -> Result<(), String> {
-    let series = Series::new(name.into(), data);
-    writer.columns.insert(name.to_string(), series);
-    writer.column_order.push(name.to_string());
+    parquet_writer_add_column(writer, Series::new(name.into(), data));
     Ok(())
 }
 
@@ -496,9 +515,7 @@ fn parquet_writer_add_bool_column(
     name: &str,
     data: &[bool],
 ) -> Result<(), String> {
-    let series = Series::new(name.into(), data);
-    writer.columns.insert(name.to_string(), series);
-    writer.column_order.push(name.to_string());
+    parquet_writer_add_column(writer, Series::new(name.into(), data));
     Ok(())
 }
 
@@ -507,13 +524,52 @@ fn parquet_writer_add_datetime_column(
     name: &str,
     data: &[i64],
 ) -> Result<(), String> {
-    // Create a datetime series from milliseconds since epoch
     let ca = Int64Chunked::from_slice(name.into(), data);
     let series = ca
         .into_datetime(TimeUnit::Milliseconds, Some("Asia/Shanghai".into()))
         .into_series();
-    writer.columns.insert(name.to_string(), series);
-    writer.column_order.push(name.to_string());
+    parquet_writer_add_column(writer, series);
+    Ok(())
+}
+
+fn parquet_writer_write_batch(writer: &mut ParquetWriter) -> Result<(), String> {
+    if writer.columns.is_empty() {
+        return Ok(());
+    }
+
+    let columns = std::mem::take(&mut writer.columns);
+    let df = DataFrame::new(columns).map_err(|e| e.to_string())?;
+
+    if writer.batched.is_none() {
+        let file = std::fs::File::create(&writer.path).map_err(|e| e.to_string())?;
+        let buf = BufWriter::new(file);
+        let mut pw = polars::io::parquet::write::ParquetWriter::new(buf)
+            .with_compression(writer.compression);
+        if writer.row_group_size > 0 {
+            pw = pw.with_row_group_size(Some(writer.row_group_size));
+        }
+        // row_group_size=0 means Polars default (~262K rows per row group)
+        writer.batched = Some(pw.batched(df.schema()).map_err(|e| e.to_string())?);
+    }
+
+    writer
+        .batched
+        .as_mut()
+        .unwrap()
+        .write_batch(&df)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn parquet_writer_finish(mut writer: Box<ParquetWriter>) -> Result<(), String> {
+    // Flush remaining columns
+    if !writer.columns.is_empty() {
+        parquet_writer_write_batch(&mut writer)?;
+    }
+
+    if let Some(batched) = &writer.batched {
+        batched.finish().map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
@@ -617,23 +673,4 @@ fn execute_query(query: &ParquetQuery) -> Result<DataFrame, String> {
 fn parquet_query_collect_df(query: Box<ParquetQuery>) -> Result<Box<ParquetDataFrame>, String> {
     let df = execute_query(&query)?;
     Ok(Box::new(ParquetDataFrame { df }))
-}
-
-fn parquet_writer_finish(writer: Box<ParquetWriter>) -> Result<(), String> {
-    // Build DataFrame from columns in order
-    let columns: Vec<Column> = writer
-        .column_order
-        .iter()
-        .filter_map(|name| writer.columns.get(name).map(|s| s.clone().into()))
-        .collect();
-
-    if columns.is_empty() {
-        return Err("No columns to write".to_string());
-    }
-
-    let mut df = DataFrame::new(columns).map_err(|e| e.to_string())?;
-
-    PolarsWriter::new(&writer.path)
-        .write(&mut df)
-        .map_err(|e| e.to_string())
 }

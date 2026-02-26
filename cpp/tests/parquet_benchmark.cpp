@@ -164,7 +164,7 @@ int main() {
   });
 
   // Summary
-  std::cout << std::endl << "=== Summary ===" << std::endl;
+  std::cout << std::endl << "=== Read Summary ===" << std::endl;
   std::cout << "Rows: " << num_rows << std::endl;
   std::cout << "DataFrame open (projected): " << df_open_projected_time << " ms"
             << std::endl;
@@ -179,6 +179,118 @@ int main() {
   double total_new = df_open_projected_time + column_access_time;
   std::cout << std::endl
             << "DataFrame (open + access): " << total_new << " ms" << std::endl;
+
+  // ==================== Write Benchmarks ====================
+  std::cout << std::endl << "=== Write Benchmark ===" << std::endl;
+
+  // Prepare write data: read source file into structs
+  std::vector<TickData> write_data;
+  {
+    basis_rs::DataFrame df(TEST_FILE, {"StockId", "Close", "High", "Low"});
+    write_data = df.ReadAllAs<TickData>();
+  }
+  std::cout << "Write dataset: " << write_data.size() << " rows, 4 columns"
+            << std::endl;
+
+  auto tmp_dir = std::filesystem::temp_directory_path() / "basis_rs_bench";
+  std::filesystem::create_directories(tmp_dir);
+
+  // Write: no streaming (default, all buffered)
+  auto write_path = tmp_dir / "bench_write.parquet";
+  double write_default_time =
+      benchmark("Write (default, zstd)", [&]() {
+        basis_rs::ParquetWriter<TickData> writer(write_path);
+        writer.WriteRecords(write_data);
+        writer.Finish();
+      });
+
+  // Write: streaming with row_group_size
+  double write_streaming_time =
+      benchmark("Write (streaming 500K, zstd)", [&]() {
+        basis_rs::ParquetWriter<TickData> writer(write_path);
+        writer.WithRowGroupSize(500000);
+        writer.WriteRecords(write_data);
+        writer.Finish();
+      });
+
+  // Write: snappy compression
+  double write_snappy_time =
+      benchmark("Write (streaming 500K, snappy)", [&]() {
+        basis_rs::ParquetWriter<TickData> writer(write_path);
+        writer.WithCompression("snappy").WithRowGroupSize(500000);
+        writer.WriteRecords(write_data);
+        writer.Finish();
+      });
+
+  // Write: uncompressed
+  double write_uncomp_time =
+      benchmark("Write (streaming 500K, uncompressed)", [&]() {
+        basis_rs::ParquetWriter<TickData> writer(write_path);
+        writer.WithCompression("uncompressed").WithRowGroupSize(500000);
+        writer.WriteRecords(write_data);
+        writer.Finish();
+      });
+
+  // ==================== Write Overhead Breakdown ====================
+  std::cout << std::endl << "--- Write Overhead Breakdown ---" << std::endl;
+
+  // Measure AoS→SoA extraction only (no FFI)
+  benchmark("AoS->SoA extraction (4 cols)", [&]() {
+    std::vector<int32_t> col0;
+    std::vector<float> col1, col2, col3;
+    col0.reserve(write_data.size());
+    col1.reserve(write_data.size());
+    col2.reserve(write_data.size());
+    col3.reserve(write_data.size());
+    for (const auto& r : write_data) {
+      col0.push_back(r.stock_id);
+      col1.push_back(r.close);
+      col2.push_back(r.high);
+      col3.push_back(r.low);
+    }
+  });
+
+  // Measure FFI column add + write_batch only (pre-extracted data)
+  std::vector<int32_t> pre_col0;
+  std::vector<float> pre_col1, pre_col2, pre_col3;
+  pre_col0.reserve(write_data.size());
+  pre_col1.reserve(write_data.size());
+  pre_col2.reserve(write_data.size());
+  pre_col3.reserve(write_data.size());
+  for (const auto& r : write_data) {
+    pre_col0.push_back(r.stock_id);
+    pre_col1.push_back(r.close);
+    pre_col2.push_back(r.high);
+    pre_col3.push_back(r.low);
+  }
+
+  benchmark("FFI add_columns + write_batch + finish (pre-extracted)", [&]() {
+    auto w = basis_rs::ffi::parquet_writer_new(write_path.string(), "zstd", 500000);
+    rust::Slice<const int32_t> s0(pre_col0.data(), pre_col0.size());
+    rust::Slice<const float> s1(pre_col1.data(), pre_col1.size());
+    rust::Slice<const float> s2(pre_col2.data(), pre_col2.size());
+    rust::Slice<const float> s3(pre_col3.data(), pre_col3.size());
+    basis_rs::ffi::parquet_writer_add_i32_column(*w, "StockId", s0);
+    basis_rs::ffi::parquet_writer_add_f32_column(*w, "Close", s1);
+    basis_rs::ffi::parquet_writer_add_f32_column(*w, "High", s2);
+    basis_rs::ffi::parquet_writer_add_f32_column(*w, "Low", s3);
+    basis_rs::ffi::parquet_writer_write_batch(*w);
+    basis_rs::ffi::parquet_writer_finish(std::move(w));
+  });
+
+  std::cout << std::endl << "=== Write Summary ===" << std::endl;
+  double rows_m = write_data.size() / 1e6;
+  std::cout << "Default (zstd):       " << write_default_time << " ms ("
+            << rows_m / (write_default_time / 1000.0) << " M rows/s)" << std::endl;
+  std::cout << "Streaming (zstd):     " << write_streaming_time << " ms ("
+            << rows_m / (write_streaming_time / 1000.0) << " M rows/s)" << std::endl;
+  std::cout << "Streaming (snappy):   " << write_snappy_time << " ms ("
+            << rows_m / (write_snappy_time / 1000.0) << " M rows/s)" << std::endl;
+  std::cout << "Streaming (uncomp):   " << write_uncomp_time << " ms ("
+            << rows_m / (write_uncomp_time / 1000.0) << " M rows/s)" << std::endl;
+
+  // Cleanup
+  std::filesystem::remove_all(tmp_dir);
 
   return 0;
 }

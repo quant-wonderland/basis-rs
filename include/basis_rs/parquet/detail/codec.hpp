@@ -102,10 +102,9 @@ class ParquetCodec {
     column_writers_.push_back(
         [name, accessor](ffi::ParquetWriter& writer,
                          const std::vector<RecordType>& records) {
-          std::vector<T> data;
-          data.reserve(records.size());
-          for (const auto& rec : records) {
-            data.push_back(rec.*accessor);
+          std::vector<T> data(records.size());
+          for (size_t i = 0; i < records.size(); ++i) {
+            data[i] = records[i].*accessor;
           }
           ParquetCellCodec<T>::Write(writer, name, data);
         });

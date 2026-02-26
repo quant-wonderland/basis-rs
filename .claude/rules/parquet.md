@@ -64,7 +64,28 @@ All benchmarks use the multi-file averaging method to avoid OS page cache interf
 
 ### FFI Overhead
 
-C++ FFI overhead is ~1ms (negligible) — C++ query performance equals pure Polars.
+C++ FFI overhead is ~1ms (negligible) for reads — C++ query performance equals pure Polars.
+
+### Write Performance (single file, warm cache, 20.7M rows × 4 columns)
+
+| Configuration | Rust (Polars) | C++ (FFI) | Ratio | Notes |
+|---------------|---------------|-----------|-------|-------|
+| Zstd, default RGS | 607ms (34 M/s) | 1910ms (11 M/s) | 3.1x | |
+| Zstd, RGS=500K | 474ms (44 M/s) | 1941ms (11 M/s) | 4.1x | |
+| Snappy, RGS=500K | 440ms (47 M/s) | 1815ms (11 M/s) | 4.1x | |
+| Uncompressed, RGS=500K | 666ms (31 M/s) | 2073ms (10 M/s) | 3.1x | |
+
+**Write overhead breakdown** (C++ FFI path, zstd RGS=500K):
+
+| Phase | Time | Notes |
+|-------|------|-------|
+| AoS→SoA extraction | ~800ms | 4 column traversals over 20M structs |
+| FFI + Series::new + Polars write | ~928ms | Matches pure Rust from-Vecs path (960ms) |
+| **Total** | **~1941ms** | |
+
+- FFI overhead is near-zero: C++ pre-extracted → Rust write (928ms) ≈ pure Rust from-Vecs → write (960ms)
+- The gap vs Rust baseline (474ms) comes from: (1) Series::new copies slice data (~485ms), (2) AoS→SoA struct field extraction (~800ms)
+- Both copies are architecturally unavoidable: AoS→SoA is inherent to struct-based API, Series::new must own its memory
 
 ### Write Tuning: row_group_size Impact (multi-file avg, DatayesTickSliceArchiver/2025/01)
 
@@ -189,11 +210,48 @@ inline const basis_rs::ParquetCodec<TickData>& basis_rs::GetParquetCodec() {
     return codec;
 }
 
-// Write records
+// Basic write (all buffered, flushed on Finish)
 basis_rs::ParquetWriter<TickData> writer("output.parquet");
 writer.WriteRecord({123, 45.6f, absl::CivilDay(2024, 1, 15)});
 writer.WriteRecords(records_vector);
 writer.Finish();  // Or let destructor auto-finish
+
+// With configuration
+basis_rs::ParquetWriter<TickData> writer("output.parquet");
+writer.WithCompression("snappy")   // "zstd" (default), "snappy", "lz4", "gzip", "uncompressed"
+      .WithRowGroupSize(500000);   // Enable streaming: auto-flush every 500K rows
+for (const auto& record : large_dataset) {
+    writer.WriteRecord(record);    // Auto-flushes when buffer reaches row_group_size
+}
+writer.Finish();                   // Flushes remaining + writes parquet footer
+```
+
+### Writer Configuration
+
+| Method | Default | Description |
+|--------|---------|-------------|
+| `WithCompression(str)` | `"zstd"` | Compression algorithm |
+| `WithRowGroupSize(n)` | `0` (Polars default ~262K) | Row group size; when > 0, enables streaming auto-flush |
+
+### Streaming Write
+
+When `WithRowGroupSize(n)` is set (n > 0), the writer operates in streaming mode:
+- `WriteRecord`/`WriteRecords` auto-flush when buffer reaches `n` rows
+- Each flush writes one row group via Polars `BatchedWriter`
+- Memory usage bounded to ~`n` records + one row group of Polars data
+- `Finish()` flushes remaining buffer and writes the parquet footer
+
+When `row_group_size` is 0 (default), all records are buffered and written in a single `Finish()` call (Polars internally splits into row groups using its default size).
+
+### Write Data Flow
+```
+C++ WriteRecord(record) → buffer_.push_back()
+  → buffer >= row_group_size? → FlushBatch()
+    → Codec::WriteAll() extracts columns (AoS→SoA)
+      → FFI parquet_writer_add_*_column() → Polars Series (Vec<Column>)
+        → parquet_writer_write_batch() → DataFrame → BatchedWriter::write_batch()
+          → buffer_.clear()
+C++ Finish() → flush remaining → BatchedWriter::finish() (writes footer)
 ```
 
 ### AbseilCivilTime Support

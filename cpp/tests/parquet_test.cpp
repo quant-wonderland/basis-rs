@@ -569,6 +569,106 @@ TEST_F(ParquetTest, GetStringColumn)
   EXPECT_EQ(names[1], "bob");
 }
 
+// ==================== ParquetWriter Config & Streaming Tests ====================
+
+TEST_F(ParquetTest, ParquetWriterWithCompression)
+{
+  auto path = temp_dir_ / "writer_snappy.parquet";
+
+  {
+    basis_rs::ParquetWriter<SimpleEntry> writer(path);
+    writer.WithCompression("snappy");
+    writer.WriteRecord({1, "alice", 85.5});
+    writer.WriteRecord({2, "bob", 92.0});
+    writer.Finish();
+  }
+
+  basis_rs::DataFrame df(path);
+  EXPECT_EQ(df.NumRows(), 2);
+  auto records = df.ReadAllAs<SimpleEntry>();
+  EXPECT_EQ(records[0].id, 1);
+  EXPECT_EQ(records[1].name, "bob");
+}
+
+TEST_F(ParquetTest, ParquetWriterStreaming)
+{
+  auto path = temp_dir_ / "writer_streaming.parquet";
+
+  {
+    basis_rs::ParquetWriter<SimpleEntry> writer(path);
+    writer.WithRowGroupSize(100);
+    for (int i = 0; i < 350; ++i)
+    {
+      writer.WriteRecord(
+          {static_cast<int64_t>(i), "n" + std::to_string(i), i * 1.0});
+    }
+    writer.Finish();
+  }
+
+  basis_rs::DataFrame df(path);
+  EXPECT_EQ(df.NumRows(), 350);
+  auto records = df.ReadAllAs<SimpleEntry>();
+  EXPECT_EQ(records[0].id, 0);
+  EXPECT_EQ(records[349].id, 349);
+}
+
+TEST_F(ParquetTest, ParquetWriterStreamingWithConfig)
+{
+  auto path = temp_dir_ / "writer_streaming_config.parquet";
+
+  {
+    basis_rs::ParquetWriter<SimpleEntry> writer(path);
+    writer.WithCompression("snappy").WithRowGroupSize(50);
+    for (int i = 0; i < 120; ++i)
+    {
+      writer.WriteRecord(
+          {static_cast<int64_t>(i), "x", i * 0.5});
+    }
+    writer.Finish();
+  }
+
+  basis_rs::DataFrame df(path);
+  EXPECT_EQ(df.NumRows(), 120);
+}
+
+TEST_F(ParquetTest, ParquetWriterStreamingBoundary)
+{
+  auto path = temp_dir_ / "writer_boundary.parquet";
+
+  // Test exact boundaries: 100, 200, 300 rows with row_group_size=100
+  for (int total : {100, 200, 300})
+  {
+    {
+      basis_rs::ParquetWriter<SimpleEntry> writer(path);
+      writer.WithRowGroupSize(100);
+      for (int i = 0; i < total; ++i)
+      {
+        writer.WriteRecord(
+            {static_cast<int64_t>(i), "n", i * 1.0});
+      }
+      writer.Finish();
+    }
+
+    basis_rs::DataFrame df(path);
+    EXPECT_EQ(df.NumRows(), total);
+    fs::remove(path);
+  }
+}
+
+TEST_F(ParquetTest, ParquetWriterDoubleFinish)
+{
+  auto path = temp_dir_ / "writer_double_finish.parquet";
+
+  basis_rs::ParquetWriter<SimpleEntry> writer(path);
+  writer.WriteRecord({1, "alice", 85.5});
+  writer.Finish();
+  // Second Finish() should be a no-op (guarded by finalized_)
+  EXPECT_NO_THROW(writer.Finish());
+
+  basis_rs::DataFrame df(path);
+  EXPECT_EQ(df.NumRows(), 1);
+}
+
 // ==================== Large Dataset Tests ====================
 
 TEST_F(ParquetTest, LargeDataset)
