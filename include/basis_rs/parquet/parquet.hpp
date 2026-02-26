@@ -312,6 +312,8 @@ class ParquetWriter {
     other.finalized_ = true;
   }
 
+  // Destructor attempts best-effort flush. Exceptions are silently swallowed
+  // because destructors must be noexcept. Call Finish() explicitly to handle errors.
   ~ParquetWriter() {
     if (!finalized_ && (!buffer_.empty() || writer_)) {
       try {

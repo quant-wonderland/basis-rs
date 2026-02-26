@@ -548,6 +548,7 @@ fn parquet_writer_write_batch(writer: &mut ParquetWriter) -> Result<(), String> 
         if writer.row_group_size > 0 {
             pw = pw.with_row_group_size(Some(writer.row_group_size));
         }
+        // row_group_size=0 means Polars default (~262K rows per row group)
         writer.batched = Some(pw.batched(df.schema()).map_err(|e| e.to_string())?);
     }
 
