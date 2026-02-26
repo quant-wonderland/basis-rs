@@ -15,6 +15,7 @@ Parquet file I/O using Polars, exposed to C++ via CXX bridge. The module provide
 
 1. **DataFrame API**: Zero-copy column access with optional filtering and column selection
 2. **ParquetWriter API**: Struct-based writes to Parquet files
+3. **ColumnarParquetWriter API**: High-performance zero-copy columnar writes (up to 2.5x faster than struct-based)
 
 ## Performance
 
@@ -68,24 +69,26 @@ C++ FFI overhead is ~1ms (negligible) for reads — C++ query performance equals
 
 ### Write Performance (single file, warm cache, 20.7M rows × 4 columns)
 
-| Configuration | Rust (Polars) | C++ (FFI) | Ratio | Notes |
-|---------------|---------------|-----------|-------|-------|
-| Zstd, default RGS | 607ms (34 M/s) | 1910ms (11 M/s) | 3.1x | |
-| Zstd, RGS=500K | 474ms (44 M/s) | 1941ms (11 M/s) | 4.1x | |
-| Snappy, RGS=500K | 440ms (47 M/s) | 1815ms (11 M/s) | 4.1x | |
-| Uncompressed, RGS=500K | 666ms (31 M/s) | 2073ms (10 M/s) | 3.1x | |
+| Configuration | Rust (Polars) | ParquetWriter\<T\> (struct) | ColumnarParquetWriter | Notes |
+|---------------|---------------|---------------------------|----------------------|-------|
+| Zstd, default RGS | 598ms (35 M/s) | 1873ms (11 M/s) | — | |
+| Zstd, RGS=500K | 588ms (35 M/s) | 1867ms (11 M/s) | 401ms (52 M/s) | Zero-copy |
+| Snappy, RGS=500K | 452ms (46 M/s) | 1769ms (12 M/s) | 321ms (65 M/s) | Zero-copy |
+| Uncompressed, RGS=500K | 652ms (32 M/s) | 1982ms (10 M/s) | — | |
 
 **Write overhead breakdown** (C++ FFI path, zstd RGS=500K):
 
 | Phase | Time | Notes |
 |-------|------|-------|
-| AoS→SoA extraction | ~800ms | 4 column traversals over 20M structs |
-| FFI + Series::new + Polars write | ~928ms | Matches pure Rust from-Vecs path (960ms) |
-| **Total** | **~1941ms** | |
+| AoS→SoA extraction | ~574ms | 4 column traversals over 20M structs |
+| FFI + Series::new + Polars write | ~520ms | Copy path (struct writer) |
+| **ParquetWriter\<T\> total** | **~1073ms** | extraction + FFI |
+| **ColumnarWriter total** | **~401ms** | Zero-copy FFI (no extraction, no memcpy) |
 
-- FFI overhead is near-zero: C++ pre-extracted → Rust write (928ms) ≈ pure Rust from-Vecs → write (960ms)
-- The gap vs Rust baseline (474ms) comes from: (1) Series::new copies slice data (~485ms), (2) AoS→SoA struct field extraction (~800ms)
-- Both copies are architecturally unavoidable: AoS→SoA is inherent to struct-based API, Series::new must own its memory
+- ColumnarParquetWriter is **2.7x faster** than ParquetWriter\<T\> — eliminates both AoS→SoA extraction and Series::new memcpy
+- ColumnarWriter uses `polars_arrow::ffi::mmap::slice_and_owner` to wrap C++ memory as Arrow arrays without copying
+- ColumnarWriter now **faster than pure Rust baseline** (401ms vs 588ms zstd) because Rust baseline also uses Series::new (copies)
+- Remaining time is pure parquet encoding (compression, page construction) — architecturally minimal
 
 ### Write Tuning: row_group_size Impact (multi-file avg, DatayesTickSliceArchiver/2025/01)
 
@@ -112,7 +115,7 @@ Original files have 5 row groups × ~5M rows each. Re-written with all 49 column
 | `src/lib.rs` | Crate entry point: re-exports `ParquetError`, `ParquetReader`, `ParquetWriter` |
 | `src/parquet.rs` | Rust public API: builder pattern readers/writers |
 | `src/cxx_bridge.rs` | CXX FFI layer: `ParquetDataFrame` (zero-copy), `ParquetQuery`, `ParquetWriter` |
-| `include/basis_rs/parquet/parquet.hpp` | Main C++ API header (DataFrame, DataFrameBuilder, ParquetWriter) |
+| `include/basis_rs/parquet/parquet.hpp` | Main C++ API header (DataFrame, DataFrameBuilder, ParquetWriter, ColumnarParquetWriter) |
 | `include/basis_rs/parquet/detail/column_accessor.hpp` | ColumnAccessor, ColumnIterator, ColumnChunkView |
 | `include/basis_rs/parquet/detail/codec.hpp` | ParquetCodec for struct-column mapping |
 | `include/basis_rs/parquet/detail/query.hpp` | DataFrameBuilder implementation |
@@ -271,6 +274,45 @@ auto entries = df.ReadAllAs<DateEntry>();
 writer.WriteRecord({1, absl::CivilDay(2024, 6, 30)});
 ```
 
+## ColumnarParquetWriter API
+
+High-performance zero-copy columnar writer that accepts SoA data directly, bypassing both AoS→SoA extraction and Series::new memcpy. Uses `polars_arrow::ffi::mmap::slice_and_owner` to wrap C++ memory as Arrow arrays without copying. **2.7x faster** than `ParquetWriter<T>`.
+
+```cpp
+#include <basis_rs/parquet/parquet.hpp>
+
+std::vector<int32_t> stock_ids = { /* ... */ };
+std::vector<float> closes = { /* ... */ };
+std::vector<float> highs = { /* ... */ };
+std::vector<float> lows = { /* ... */ };
+
+basis_rs::ColumnarParquetWriter writer("output.parquet");
+writer.WithCompression("zstd").WithRowGroupSize(500000);
+writer.AddColumn("StockId", stock_ids.data(), stock_ids.size());
+writer.AddColumn("Close", closes.data(), closes.size());
+writer.AddColumn("High", highs.data(), highs.size());
+writer.AddColumn("Low", lows.data(), lows.size());
+writer.WriteBatch();
+writer.Finish();
+```
+
+### AddColumn Overloads
+
+| Method | Types |
+|--------|-------|
+| `AddColumn(name, const T* data, size_t len)` | `int32_t`, `int64_t`, `float`, `double`, `bool` |
+| `AddColumn(name, const std::vector<std::string>&)` | strings |
+| `AddDateTimeColumn(name, const int64_t* data, size_t len)` | raw milliseconds |
+| `AddDateTimeColumn(name, const std::vector<T>&)` | `absl::CivilDay`, `absl::CivilSecond`, etc. |
+
+### Important Notes
+
+- Column data pointers must remain valid until `WriteBatch()` is called (zero-copy: Rust Arrow arrays point directly to C++ memory)
+- Numeric columns (int32/64, float, double, datetime) use zero-copy `_zerocopy` FFI path; string/bool columns still copy
+- Call `WriteBatch()` to flush all added columns as one row group, then add more columns for the next batch
+- `Finish()` flushes remaining columns + writes parquet footer; destructor auto-finishes
+- Same `WithCompression()` / `WithRowGroupSize()` builder methods as `ParquetWriter<T>`
+
 ## Architecture
 
 ### Header Structure
@@ -288,6 +330,7 @@ include/basis_rs/parquet/
 
 ### Zero-Copy Data Flow
 ```
+Read path:
 C++ DataFrame
   -> parquet_open() or parquet_open_projected() FFI
     -> Rust Polars reads parquet
@@ -295,6 +338,14 @@ C++ DataFrame
         -> C++ GetColumn<T>() -> parquet_df_get_*_chunks() FFI
           -> Returns raw pointers to Polars internal buffers
             -> C++ iterates directly on Rust memory
+
+Write path (ColumnarParquetWriter):
+C++ AddColumn(name, ptr, len) -> stores lambda with raw pointer
+  -> WriteBatch() executes lambdas
+    -> FFI parquet_writer_add_*_column_zerocopy()
+      -> slice_and_owner(data, ()) wraps C++ memory as Arrow PrimitiveArray (no copy)
+        -> ChunkedArray::with_chunk() -> Series -> Column
+          -> parquet_writer_write_batch() -> DataFrame -> BatchedWriter (encodes to parquet)
 ```
 
 ### Filtered Query Flow
@@ -309,19 +360,19 @@ C++ DataFrame::Open(path).Select(...).Filter(...).Collect()
 
 ## Type Mapping
 
-| C++ | CXX | Rust/Polars | Zero-copy |
-|-----|-----|-------------|-----------|
-| `int32_t` | `i32` | `Int32` | Yes |
-| `int64_t` | `i64` | `Int64` | Yes |
-| `uint64_t` | `u64` | `UInt64` | Yes |
-| `float` | `f32` | `Float32` | Yes |
-| `double` | `f64` | `Float64` | Yes |
-| `std::string` | `String` | `String` | No (allocation) |
-| `bool` | `bool` | `Boolean` | No (bit-packed) |
-| `absl::CivilDay` | `i64` (ms) | `Datetime` | Yes (via int64) |
-| `absl::CivilSecond` | `i64` (ms) | `Datetime` | Yes (via int64) |
-| `absl::CivilMinute` | `i64` (ms) | `Datetime` | Yes (via int64) |
-| `absl::CivilHour` | `i64` (ms) | `Datetime` | Yes (via int64) |
+| C++ | CXX | Rust/Polars | Zero-copy Read | Zero-copy Write |
+|-----|-----|-------------|----------------|-----------------|
+| `int32_t` | `i32` | `Int32` | Yes | Yes (`slice_and_owner`) |
+| `int64_t` | `i64` | `Int64` | Yes | Yes (`slice_and_owner`) |
+| `uint64_t` | `u64` | `UInt64` | Yes | — |
+| `float` | `f32` | `Float32` | Yes | Yes (`slice_and_owner`) |
+| `double` | `f64` | `Float64` | Yes | Yes (`slice_and_owner`) |
+| `std::string` | `String` | `String` | No (allocation) | No (allocation) |
+| `bool` | `bool` | `Boolean` | No (bit-packed) | No (bit-packed) |
+| `absl::CivilDay` | `i64` (ms) | `Datetime` | Yes (via int64) | Yes (via int64 `slice_and_owner`) |
+| `absl::CivilSecond` | `i64` (ms) | `Datetime` | Yes (via int64) | Yes (via int64 `slice_and_owner`) |
+| `absl::CivilMinute` | `i64` (ms) | `Datetime` | Yes (via int64) | Yes (via int64 `slice_and_owner`) |
+| `absl::CivilHour` | `i64` (ms) | `Datetime` | Yes (via int64) | Yes (via int64 `slice_and_owner`) |
 
 ## Adding a New Column Type
 
@@ -361,6 +412,8 @@ cargo test && cd build && ctest --output-on-failure
 ## Dependencies
 
 - `polars 0.46` with `parquet` + `lazy` features
+- `polars-arrow 0.46` (direct dep for `ffi::mmap::slice_and_owner` zero-copy write)
+- `polars-core 0.46` (direct dep for `ChunkedArray::with_chunk`)
 - `cxx 1.0` / `cxx-build 1.0`
 - `thiserror 2.0`
 - `abseil-cpp` (absl::time for CivilDay/CivilSecond support)

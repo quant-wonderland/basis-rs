@@ -157,6 +157,8 @@ dependencies = [
  "cxx",
  "cxx-build",
  "polars",
+ "polars-arrow",
+ "polars-core",
  "tempfile",
  "thiserror",
 ]

@@ -949,3 +949,162 @@ TEST_F(ParquetTest, GetDateTimeColumnIteration)
 
   EXPECT_EQ(sum_iter, sum_index);
 }
+
+// ==================== ColumnarParquetWriter Tests ====================
+
+TEST_F(ParquetTest, ColumnarWriterBasic)
+{
+  auto path = temp_dir_ / "columnar_basic.parquet";
+
+  std::vector<int32_t> ids = {1, 2, 3};
+  std::vector<float> scores = {85.5f, 92.0f, 78.5f};
+
+  {
+    basis_rs::ColumnarParquetWriter writer(path);
+    writer.AddColumn("id", ids.data(), ids.size());
+    writer.AddColumn("score", scores.data(), scores.size());
+    writer.WriteBatch();
+    writer.Finish();
+  }
+
+  basis_rs::DataFrame df(path);
+  EXPECT_EQ(df.NumRows(), 3);
+  auto id_col = df.GetColumn<int32_t>("id");
+  auto score_col = df.GetColumn<float>("score");
+  EXPECT_EQ(id_col[0], 1);
+  EXPECT_EQ(id_col[2], 3);
+  EXPECT_FLOAT_EQ(score_col[1], 92.0f);
+}
+
+TEST_F(ParquetTest, ColumnarWriterAllTypes)
+{
+  auto path = temp_dir_ / "columnar_types.parquet";
+
+  std::vector<int32_t> i32s = {1, 2};
+  std::vector<int64_t> i64s = {100, 200};
+  std::vector<float> f32s = {1.5f, 2.5f};
+  std::vector<double> f64s = {3.14, 2.72};
+
+  {
+    basis_rs::ColumnarParquetWriter writer(path);
+    writer.AddColumn("i32", i32s.data(), i32s.size());
+    writer.AddColumn("i64", i64s.data(), i64s.size());
+    writer.AddColumn("f32", f32s.data(), f32s.size());
+    writer.AddColumn("f64", f64s.data(), f64s.size());
+    writer.WriteBatch();
+    writer.Finish();
+  }
+
+  basis_rs::DataFrame df(path);
+  EXPECT_EQ(df.NumRows(), 2);
+  EXPECT_EQ(df.GetColumn<int32_t>("i32")[0], 1);
+  EXPECT_EQ(df.GetColumn<int64_t>("i64")[1], 200);
+  EXPECT_FLOAT_EQ(df.GetColumn<float>("f32")[0], 1.5f);
+  EXPECT_DOUBLE_EQ(df.GetColumn<double>("f64")[1], 2.72);
+}
+
+TEST_F(ParquetTest, ColumnarWriterStrings)
+{
+  auto path = temp_dir_ / "columnar_strings.parquet";
+
+  std::vector<int64_t> ids = {1, 2};
+  std::vector<std::string> names = {"alice", "bob"};
+
+  {
+    basis_rs::ColumnarParquetWriter writer(path);
+    writer.AddColumn("id", ids.data(), ids.size());
+    writer.AddColumn("name", names);
+    writer.WriteBatch();
+    writer.Finish();
+  }
+
+  basis_rs::DataFrame df(path);
+  EXPECT_EQ(df.NumRows(), 2);
+  auto strs = df.GetStringColumn("name");
+  EXPECT_EQ(strs[0], "alice");
+  EXPECT_EQ(strs[1], "bob");
+}
+
+TEST_F(ParquetTest, ColumnarWriterDateTime)
+{
+  auto path = temp_dir_ / "columnar_datetime.parquet";
+
+  std::vector<int64_t> ids = {1, 2};
+  std::vector<absl::CivilDay> dates = {
+      absl::CivilDay(2024, 1, 15),
+      absl::CivilDay(2024, 6, 30),
+  };
+
+  {
+    basis_rs::ColumnarParquetWriter writer(path);
+    writer.AddColumn("id", ids.data(), ids.size());
+    writer.AddDateTimeColumn("date", dates);
+    writer.WriteBatch();
+    writer.Finish();
+  }
+
+  basis_rs::DataFrame df(path);
+  auto records = df.ReadAllAs<DateEntry>();
+  ASSERT_EQ(records.size(), 2);
+  EXPECT_EQ(records[0].date, absl::CivilDay(2024, 1, 15));
+  EXPECT_EQ(records[1].date, absl::CivilDay(2024, 6, 30));
+}
+
+TEST_F(ParquetTest, ColumnarWriterStreaming)
+{
+  auto path = temp_dir_ / "columnar_streaming.parquet";
+
+  {
+    basis_rs::ColumnarParquetWriter writer(path);
+    writer.WithCompression("snappy").WithRowGroupSize(100);
+
+    for (int batch = 0; batch < 3; ++batch) {
+      std::vector<int64_t> ids(100);
+      std::vector<double> vals(100);
+      for (int i = 0; i < 100; ++i) {
+        ids[i] = batch * 100 + i;
+        vals[i] = ids[i] * 0.5;
+      }
+      writer.AddColumn("id", ids.data(), ids.size());
+      writer.AddColumn("val", vals.data(), vals.size());
+      writer.WriteBatch();
+    }
+    writer.Finish();
+  }
+
+  basis_rs::DataFrame df(path);
+  EXPECT_EQ(df.NumRows(), 300);
+  auto id_col = df.GetColumn<int64_t>("id");
+  EXPECT_EQ(id_col[0], 0);
+  EXPECT_EQ(id_col[299], 299);
+}
+
+TEST_F(ParquetTest, ColumnarWriterAutoFinish)
+{
+  auto path = temp_dir_ / "columnar_auto.parquet";
+
+  {
+    basis_rs::ColumnarParquetWriter writer(path);
+    std::vector<int64_t> ids = {1};
+    writer.AddColumn("id", ids.data(), ids.size());
+    // destructor should flush + finish
+  }
+
+  EXPECT_TRUE(fs::exists(path));
+  basis_rs::DataFrame df(path);
+  EXPECT_EQ(df.NumRows(), 1);
+}
+
+TEST_F(ParquetTest, ColumnarWriterDiscard)
+{
+  auto path = temp_dir_ / "columnar_discard.parquet";
+
+  {
+    basis_rs::ColumnarParquetWriter writer(path);
+    std::vector<int64_t> ids = {1, 2};
+    writer.AddColumn("id", ids.data(), ids.size());
+    writer.Discard();
+  }
+
+  EXPECT_FALSE(fs::exists(path));
+}
