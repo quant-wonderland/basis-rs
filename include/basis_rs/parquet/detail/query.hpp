@@ -91,6 +91,12 @@ class DataFrameBuilder {
     return *this;
   }
 
+  /// Control parallel reading. Set false when caller already parallelizes.
+  DataFrameBuilder& Parallel(bool parallel) {
+    parallel_ = parallel;
+    return *this;
+  }
+
   /// Execute query and return DataFrame
   DataFrame Collect() const;
 
@@ -120,6 +126,7 @@ class DataFrameBuilder {
   std::filesystem::path path_;
   std::vector<std::string> select_names_;
   std::vector<FilterEntry> filter_entries_;
+  bool parallel_ = true;
 };
 
 }  // namespace basis_rs

@@ -66,12 +66,13 @@ mod ffi {
         type ParquetDataFrame;
 
         /// Open a parquet file and return a DataFrame wrapper
-        fn parquet_open(path: &str) -> Result<Box<ParquetDataFrame>>;
+        fn parquet_open(path: &str, parallel: bool) -> Result<Box<ParquetDataFrame>>;
 
         /// Open with column projection (only read specified columns)
         fn parquet_open_projected(
             path: &str,
             columns: Vec<String>,
+            parallel: bool,
         ) -> Result<Box<ParquetDataFrame>>;
 
         /// Get number of rows
@@ -241,21 +242,28 @@ fn dtype_to_column_type(dtype: &DataType) -> ffi::ColumnType {
     }
 }
 
-fn parquet_open(path: &str) -> Result<Box<ParquetDataFrame>, String> {
-    let df = PolarsReader::new(path).read().map_err(|e| e.to_string())?;
+fn parquet_open(path: &str, parallel: bool) -> Result<Box<ParquetDataFrame>, String> {
+    let mut reader = PolarsReader::new(path);
+    if !parallel {
+        reader = reader.with_parallel(ParallelStrategy::None);
+    }
+    let df = reader.read().map_err(|e| e.to_string())?;
     Ok(Box::new(ParquetDataFrame { df }))
 }
 
 fn parquet_open_projected(
     path: &str,
     columns: Vec<String>,
+    parallel: bool,
 ) -> Result<Box<ParquetDataFrame>, String> {
-    let df = if columns.is_empty() {
-        PolarsReader::new(path).read()
-    } else {
-        PolarsReader::new(path).with_columns(columns).read()
+    let mut reader = PolarsReader::new(path);
+    if !columns.is_empty() {
+        reader = reader.with_columns(columns);
     }
-    .map_err(|e| e.to_string())?;
+    if !parallel {
+        reader = reader.with_parallel(ParallelStrategy::None);
+    }
+    let df = reader.read().map_err(|e| e.to_string())?;
     Ok(Box::new(ParquetDataFrame { df }))
 }
 

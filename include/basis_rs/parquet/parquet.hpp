@@ -69,13 +69,20 @@ class DataFrameBuilder;
 class DataFrame {
  public:
   /// Open a Parquet file (reads all columns)
-  explicit DataFrame(const std::filesystem::path& path)
-      : df_(ffi::parquet_open(path.string())) {}
+  explicit DataFrame(const std::filesystem::path& path, bool parallel = true)
+      : df_(ffi::parquet_open(path.string(), parallel)) {}
 
   /// Open with column projection (only read specified columns)
   DataFrame(const std::filesystem::path& path,
-            const std::vector<std::string>& columns)
-      : df_(OpenProjected(path, columns)) {}
+            const std::vector<std::string>& columns,
+            bool parallel = true)
+      : df_(OpenProjected(path, columns, parallel)) {}
+
+  /// Open with column projection (initializer_list overload)
+  DataFrame(const std::filesystem::path& path,
+            std::initializer_list<std::string> columns,
+            bool parallel = true)
+      : df_(OpenProjected(path, {columns}, parallel)) {}
 
   /// Start building a DataFrame with Select/Filter options
   static DataFrameBuilder Open(const std::filesystem::path& path);
@@ -138,13 +145,14 @@ class DataFrame {
 
   static rust::Box<ffi::ParquetDataFrame> OpenProjected(
       const std::filesystem::path& path,
-      const std::vector<std::string>& columns) {
+      const std::vector<std::string>& columns,
+      bool parallel) {
     rust::Vec<rust::String> cols;
     cols.reserve(columns.size());
     for (const auto& c : columns) {
       cols.push_back(rust::String(c));
     }
-    return ffi::parquet_open_projected(path.string(), std::move(cols));
+    return ffi::parquet_open_projected(path.string(), std::move(cols), parallel);
   }
 
   rust::Box<ffi::ParquetDataFrame> df_;
@@ -236,14 +244,14 @@ inline DataFrame DataFrameBuilder::Collect() const {
   if (filter_entries_.empty()) {
     // No filters - use simple open
     if (select_names_.empty()) {
-      return DataFrame(ffi::parquet_open(path_.string()));
+      return DataFrame(ffi::parquet_open(path_.string(), parallel_));
     } else {
       rust::Vec<rust::String> cols;
       cols.reserve(select_names_.size());
       for (const auto& c : select_names_) {
         cols.push_back(rust::String(c));
       }
-      return DataFrame(ffi::parquet_open_projected(path_.string(), std::move(cols)));
+      return DataFrame(ffi::parquet_open_projected(path_.string(), std::move(cols), parallel_));
     }
   }
 

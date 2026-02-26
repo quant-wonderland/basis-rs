@@ -108,6 +108,9 @@ Original files have 5 row groups × ~5M rows each. Re-written with all 49 column
 // Simple open (all columns)
 basis_rs::DataFrame df("data.parquet");
 
+// Disable internal parallelism (when caller already parallelizes across files)
+basis_rs::DataFrame df("data.parquet", /*parallel=*/false);
+
 // With column projection
 basis_rs::DataFrame df("data.parquet", {"StockId", "Close", "High", "Low"});
 
@@ -115,6 +118,7 @@ basis_rs::DataFrame df("data.parquet", {"StockId", "Close", "High", "Low"});
 auto df = basis_rs::DataFrame::Open("data.parquet")
               .Select({"StockId", "Close", "High", "Low"})
               .Filter("Close", basis_rs::Gt, 10.0f)
+              .Parallel(false)  // optional: disable internal parallelism
               .Collect();
 
 // Zero-copy column access
@@ -149,8 +153,8 @@ auto records = df.ReadAllAs<TickData>();
 
 ### Key Classes
 
-- **`DataFrame`**: Owns the Rust DataFrame, provides `GetColumn<T>()`, `ReadAllAs<T>()`, and static `Open()` builder
-- **`DataFrameBuilder`**: Builder for DataFrame with `Select()`, `Filter()`, and `Collect()` methods
+- **`DataFrame`**: Owns the Rust DataFrame, provides `GetColumn<T>()`, `ReadAllAs<T>()`, and static `Open()` builder. Constructor accepts optional `parallel` param (default `true`); set `false` when caller already parallelizes (e.g., TBB across files) to avoid thread over-subscription.
+- **`DataFrameBuilder`**: Builder for DataFrame with `Select()`, `Filter()`, `Parallel()`, and `Collect()` methods
 - **`ColumnAccessor<T>`**: Zero-copy access to column data with seamless cross-chunk iteration
   - `begin()/end()`: Forward iterator for range-for loops
   - `operator[]`: O(log n) random access via binary search
