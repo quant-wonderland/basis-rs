@@ -29,6 +29,8 @@
 
         nativeBuildInputs = with pkgs; [ cmake ];
 
+        buildInputs = with pkgs; [ abseil-cpp ];
+
         buildType = "release";
         doCheck = true;
 
